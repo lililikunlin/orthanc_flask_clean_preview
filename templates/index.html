@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orthanc Flask 系統</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+
+<body>
+  <div class="page">
+    <header class="hero">
+      <div>
+        <h1>Orthanc × Flask 後端串接系統</h1>
+      </div>
+
+      <div class="health-card">
+        <div class="health-row">
+          <span>Backend</span>
+          <strong id="backendStatus">檢查中</strong>
+        </div>
+        <div class="health-row">
+          <span>Orthanc</span>
+          <strong id="orthancStatus">檢查中</strong>
+        </div>
+        <button id="refreshHealthBtn" class="secondary-btn">重新檢查</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card login-card">
+        <h2>登入</h2>
+
+        <form id="loginForm" class="form-grid">
+          <label>
+            帳號
+            <input id="username" name="username" type="text" placeholder="例如 doctor1" required />
+          </label>
+
+          <label>
+            密碼
+            <input id="password" name="password" type="password" placeholder="1234" required />
+          </label>
+
+          <div class="button-row">
+            <button type="submit" class="primary-btn">登入</button>
+            <button type="button" id="logoutBtn" class="secondary-btn">登出</button>
+          </div>
+        </form>
+
+        <div class="status-box" id="authStatus">尚未登入</div>
+      </section>
+
+      <section class="card role-card">
+        <h2>角色權限</h2>
+        <div id="roleInfo" class="role-info muted">尚未登入</div>
+        <div id="permissionBadges" class="permission-row">
+          <span class="permission-chip chip-muted">請先登入</span>
+        </div>
+      </section>
+
+      <section class="card upload-card" id="uploadSection" hidden>
+        <h2>新增 DICOM</h2>
+
+        <form id="uploadForm" class="form-grid">
+          <label>
+            選擇 DICOM 檔
+            <input id="dicomFile" name="dicomFile" type="file" accept=".dcm,application/dicom" />
+          </label>
+
+          <button type="submit" class="primary-btn">加入 DICOM</button>
+        </form>
+
+        <div class="status-box" id="uploadStatus">等待上傳</div>
+      </section>
+
+      <section class="card studies-card">
+        <div class="section-header">
+          <h2>Study 清單</h2>
+          <button id="loadStudiesBtn" class="primary-btn">載入 Studies</button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Study ID</th>
+                <th>Patient</th>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Instances</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+
+            <tbody id="studiesTableBody">
+              <tr>
+                <td colspan="6" class="empty-cell">尚未載入資料</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card detail-card">
+        <div class="section-header">
+          <h2>Study 詳細資料</h2>
+        </div>
+
+        <div id="studyMeta" class="meta-grid">
+          <div class="meta-empty">尚未選擇 study</div>
+        </div>
+
+        <h3>Instances</h3>
+
+        <div id="instancesList" class="instances-grid">
+          <div class="meta-empty">尚未載入 instance</div>
+        </div>
+      </section>
+
+      <section class="card preview-card">
+        <div class="section-header">
+          <h2>影像預覽</h2>
+          <button id="clearPreviewBtn" class="secondary-btn inline-btn">清除預覽</button>
+        </div>
+
+        <div class="preview-wrap">
+          <img id="previewImage" alt="DICOM preview" hidden />
+          <div id="previewPlaceholder" class="preview-placeholder">尚未選擇預覽影像</div>
+        </div>
+
+        <div id="previewStatus" class="status-box muted">尚未預覽</div>
+      </section>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# 1. 敏感環境變數（最重要！）
+.env
+
+# 2. Python 虛擬環境
+venv/
+.venv/
+env/
+
+# 3. Python 快取與編譯檔案
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# 4. 作業系統與編輯器暫存檔
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 5. 測試或暫存的 DICOM 影像檔（避免不小心流出醫療隱私資料）
+*.dcm
+*.zip
