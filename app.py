@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request, send_file, session
 from flask_cors import CORS
 
+from fido2.server import Fido2Server
+from fido2.webauthn import PublicKeyCredentialRpEntity
+from fido2.utils import websafe_encode
+
 try:
     from PIL import Image
 except Exception:  # Pillow is installed through requirements.txt, this keeps the app safer.
@@ -42,6 +46,16 @@ DEMO_USERS = {
     "doctor1": {"password": "1234", "role": "doctor"},
     "admin1": {"password": "1234", "role": "admin"},
 }
+#新增 FIDO2 的初始化與資料庫
+db = {}      # 存 FIDO2 公鑰
+states = {}  # 存 FIDO2 挑戰狀態
+rp = PublicKeyCredentialRpEntity(id="localhost", name="遠距醫療安全網關")
+server = Fido2Server(rp)
+
+def to_websafe(data):
+    if isinstance(data, str): return data
+    if isinstance(data, bytes): return websafe_encode(data)
+    return data
 
 ROLE_PERMISSIONS = {
     "patient": ["view", "modify", "delete"],
@@ -173,6 +187,7 @@ def index():
 # -------------------------
 @app.route("/api/health", methods=["GET"])
 def health_check():
+    """檢查 Flask 後端與 Orthanc 伺服器健康狀態 (保留組員 A 原本功能)"""
     status = {"backend": "ok", "orthanc": "unknown"}
     orthanc_error = None
 
@@ -187,40 +202,135 @@ def health_check():
     return jsonify({"ok": True, "status": status, "orthanc_error": orthanc_error})
 
 
-@app.route("/api/login", methods=["POST"])
-def login():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = (data.get("password") or "").strip()
+# -------------------------------------------------------------
+# FIDO2 階段一：人臉綁定註冊 (Registration)
+# -------------------------------------------------------------
 
-    user = DEMO_USERS.get(username)
-    if not user:
-        return jsonify({"ok": False, "message": "帳號不存在"}), 401
+@app.route('/api/register/begin', methods=['POST'])
+def register_begin():
+    """初始化註冊：建立醫師金鑰綁定挑戰碼"""
+    try:
+        # 對齊組員 A 的 DEMO_USERS，建立指定 doctor1 醫師節點
+        user = {'id': b'doctor1', 'name': 'doctor1', 'displayName': '陳醫師 (FIDO2 安全綁定)'}
+        
+        # 呼叫 FIDO2 核心伺服器出題
+        registration_data, state = server.register_begin(user)
+        
+        # 將臨時狀態鎖在記憶體中，防止重放攻擊與 Cookie 失真
+        states['doctor1'] = state 
+        
+        # 提取 publicKey 結構，並透過智慧型 Websafe 進行 Base64URL 轉碼
+        output = registration_data['publicKey']
+        output['challenge'] = to_websafe(output['challenge'])
+        output['user']['id'] = to_websafe(output['user']['id'])
+        
+        return jsonify(output)
+    except Exception as e:
+        print(f"❌ FIDO2 註冊出題失敗: {e}")
+        return jsonify({"ok": False, "status": "error", "message": f"初始化註冊失敗: {str(e)}"}), 500
 
-    if user["password"] != password:
-        return jsonify({"ok": False, "message": "密碼錯誤"}), 401
 
-    session["user"] = {"username": username, "role": user["role"]}
-    return jsonify(
-        {
+@app.route('/api/register/complete', methods=['POST'])
+def register_complete():
+    """收卷註冊：驗證客戶端硬體人臉簽章，並儲存公鑰鎖頭"""
+    credential_data = request.json
+    state = states.get('doctor1') # 撈出對應的臨時考題
+    
+    if not state:
+        return jsonify({"ok": False, "status": "error", "message": "找不到註冊驗證狀態，請重試"}), 400
+
+    try:
+        # 加密學校驗：檢查 Challenge 與客戶端 Attestation 簽章
+        auth_data = server.register_complete(state, credential_data)
+        
+        # 【重要】將硬體信賴公鑰存入模擬資料庫（未來可改寫至 SQLite 實體資料庫）
+        db["doctor1"] = [auth_data.credential_data]
+        
+        # 拋棄已使用的挑戰碼，確保一次性會話安全
+        del states['doctor1'] 
+        
+        print("✅ FIDO2 註冊成功：已在安全網關內儲存 doctor1 的生物辨識公鑰")
+        return jsonify({"ok": True, "status": "success", "message": "人臉憑證綁定成功"})
+    except Exception as e:
+        print(f"❌ FIDO2 註冊校驗失敗: {e}")
+        return jsonify({"ok": False, "status": "error", "message": f"資安校驗失敗: {str(e)}"}), 400
+
+
+# -------------------------------------------------------------
+# FIDO2 階段二：身分驗證登入 (Authentication)
+# -------------------------------------------------------------
+
+@app.route('/api/authenticate/begin', methods=['POST'])
+def authenticate_begin():
+    """初始化驗證：查詢醫師公鑰，並發起隨機挑戰碼"""
+    credentials = db.get("doctor1", [])
+    if not credentials:
+        return jsonify({"ok": False, "status": "error", "message": "此系統尚未綁定醫師人臉資訊，請先執行步驟 1"}), 404
+
+    # 發起驗證挑戰
+    auth_data, state = server.authenticate_begin(credentials)
+    states['doctor1'] = state # 快取狀態
+    
+    # 格式化輸出，告知網頁端允許使用哪一組 Credential ID 進行簽章
+    output = auth_data['publicKey']
+    output['challenge'] = to_websafe(output['challenge'])
+    if 'allowCredentials' in output:
+        for cred in output['allowCredentials']:
+            cred['id'] = to_websafe(cred['id'])
+            
+    return jsonify(output)
+
+
+@app.route('/api/authenticate/complete', methods=['POST'])
+def authenticate_complete():
+    """收卷驗證：拿資料庫公鑰解開前端人臉私鑰簽章，通過則核發 Orthanc 權限"""
+    credential_data = request.json
+    state = states.get('doctor1')
+    credentials = db.get("doctor1", [])
+    
+    if not state:
+        return jsonify({"ok": False, "status": "error", "message": "驗證會話已過期或不存在"}), 400
+    
+    try:
+        # 1. 執行密碼學驗證 (利用數學公式檢驗這次的 Assertion 簽章是否由綁定的私鑰產出)
+        server.authenticate_complete(state, credentials, credential_data)
+        del states['doctor1'] # 刪除防重放狀態
+        
+        # 2. 【核心大合體】驗證通過，直接注入組員 A 設計的 Session 結構！
+        # 讓這張「通過生物辨識的臉」完全繼承 doctor1 帳號的所有合法屬性
+        session["user"] = {"username": "doctor1", "role": "doctor"}
+        
+        print("🔓 FIDO2 驗證成功：確認為陳醫師本人，已安全放行 Orthanc 影像管理權限")
+        
+        # 3. 回傳格式完全契合組員 A 的前端解構需求 (完美相容 app.js 邏輯)
+        return jsonify({
             "ok": True,
-            "message": "登入成功",
+            "status": "success",
+            "message": "FIDO2 生物辨識成功，已載入安全權限",
             "user": session["user"],
-            "permissions": get_permissions(user["role"]),
-            "role_label": ROLE_LABELS.get(user["role"], user["role"]),
-        }
-    )
+            "permissions": get_permissions("doctor"),
+            "role_label": ROLE_LABELS.get("doctor", "doctor")
+        })
+    except Exception as e:
+        print(f"❌ FIDO2 登入驗證失敗: {e}")
+        return jsonify({"ok": False, "status": "error", "message": f"人臉簽章不匹配: {str(e)}"}), 400
 
+
+# -------------------------------------------------------------
+# 登出與當前使用者查詢 (保留並微調組員 A 功能以相容前端)
+# -------------------------------------------------------------
 
 @app.route("/api/logout", methods=["POST"])
 @login_required
 def logout():
+    """登出系統，全面清空 Session 授權狀態"""
     session.clear()
-    return jsonify({"ok": True, "message": "已登出"})
+    return jsonify({"ok": True, "message": "已登出安全網關"})
 
 
 @app.route("/api/me", methods=["GET"])
 def me():
+    """查詢當前身分，供前端更新角色面板使用"""
     user = get_current_user()
     if not user:
         return jsonify({"ok": False, "user": None}), 401

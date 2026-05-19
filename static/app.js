@@ -44,6 +44,25 @@ async function apiFetch(url, options = {}) {
   return data;
 }
 
+function bufferDecode(value) {
+  let base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = base64.length % 4;
+  if (pad) {
+    if (pad === 1) throw new Error('無效的 Base64 字串');
+    base64 += new Array(5 - pad).join('=');
+  }
+  return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+}
+
+function bufferEncode(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let str = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    str += String.fromCharCode(bytes[i]);
+  }
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -380,7 +399,7 @@ async function deleteInstance(instanceId) {
 
 window.deleteInstance = deleteInstance;
 
-document.getElementById("loginForm").addEventListener("submit", async (event) => {
+/*document.getElementById("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const username = document.getElementById("username").value.trim();
@@ -403,7 +422,76 @@ document.getElementById("loginForm").addEventListener("submit", async (event) =>
     setAuthMessage(error.message, true);
     renderRoleInfo();
   }
-});
+});*/
+async function doAction(type) {
+  const isReg = type === 'register';
+  try {
+    setAuthMessage(`正在初始化${isReg ? '註冊' : '驗證'}...`);
+
+    // 1. Begin
+    const beginRes = await apiFetch(`/api/${type}/begin`, { method: 'POST' });
+    const options = beginRes; // 注意這裡：因為組員A的 fetch 有包裝過，可能直接回傳 data
+
+    options.challenge = bufferDecode(options.challenge);
+    if (isReg) {
+      options.user.id = bufferDecode(options.user.id);
+    } else if (options.allowCredentials) {
+      options.allowCredentials.forEach(c => c.id = bufferDecode(c.id));
+    }
+
+    setAuthMessage("請看向鏡頭進行掃描...");
+
+    // 2. 呼叫硬體
+    const credential = isReg 
+        ? await navigator.credentials.create({ publicKey: options })
+        : await navigator.credentials.get({ publicKey: options });
+
+    setAuthMessage("正在進行資安校驗...");
+    const body = {
+      id: credential.id,
+      rawId: bufferEncode(credential.rawId),
+      type: credential.type,
+      response: isReg ? {
+          attestationObject: bufferEncode(credential.response.attestationObject),
+          clientDataJSON: bufferEncode(credential.response.clientDataJSON)
+      } : {
+          authenticatorData: bufferEncode(credential.response.authenticatorData),
+          clientDataJSON: bufferEncode(credential.response.clientDataJSON),
+          signature: bufferEncode(credential.response.signature),
+          userHandle: credential.response.userHandle ? bufferEncode(credential.response.userHandle) : null
+      }
+    };
+
+    // 3. Complete
+    const completeRes = await apiFetch(`/api/${type}/complete`, {
+        method: 'POST',
+        body: JSON.stringify(body)
+    });
+
+    if (completeRes.ok || completeRes.status === "success") {
+        if (isReg) {
+            setAuthMessage("✅ FIDO2 註冊成功！現在可以使用驗證登入了。");
+        } else {
+            // 【合體關鍵】驗證成功後，接手組員A的 UI 更新邏輯
+            currentUser = completeRes.user;
+            currentPermissions = completeRes.permissions || [];
+            setAuthMessage(`✅ FIDO2 登入成功：${currentUser.username}（${completeRes.role_label}）`);
+            renderRoleInfo();
+            resetDetail();
+            await loadStudies(); // 登入成功自動載入醫療影像！
+        }
+    }
+  } catch (error) {
+    currentUser = null;
+    currentPermissions = [];
+    setAuthMessage(`❌ 錯誤: ${error.message}`, true);
+    renderRoleInfo();
+  }
+}
+
+// 綁定按鈕事件 (對應到 index.html 的按鈕)
+document.getElementById("btnFidoReg").addEventListener("click", () => doAction('register'));
+document.getElementById("btnFidoAuth").addEventListener("click", () => doAction('authenticate'));
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   try {

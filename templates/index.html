@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -29,26 +30,16 @@
 
     <main class="layout">
       <section class="card login-card">
-        <h2>登入</h2>
+        <h2>🏥 醫師身分管理</h2>
+        <p class="muted" style="font-size: 0.9rem; margin-bottom: 20px;">使用 FIDO2 生物辨識技術確保醫療數據安全</p>
 
-        <form id="loginForm" class="form-grid">
-          <label>
-            帳號
-            <input id="username" name="username" type="text" placeholder="例如 doctor1" required />
-          </label>
+        <div class="form-grid">
+          <button type="button" id="btnFidoReg" class="primary-btn" style="background: #3498db;">步驟 1：綁定醫師人臉</button>
+          <button type="button" id="btnFidoAuth" class="primary-btn" style="background: #16a34a;">步驟 2：驗證登入身分</button>
+          <button type="button" id="logoutBtn" class="secondary-btn" style="margin-top: 5px;">登出系統</button>
+        </div>
 
-          <label>
-            密碼
-            <input id="password" name="password" type="password" placeholder="1234" required />
-          </label>
-
-          <div class="button-row">
-            <button type="submit" class="primary-btn">登入</button>
-            <button type="button" id="logoutBtn" class="secondary-btn">登出</button>
-          </div>
-        </form>
-
-        <div class="status-box" id="authStatus">尚未登入</div>
+        <div class="status-box" id="authStatus">系統就緒，請選擇操作</div>
       </section>
 
       <section class="card role-card">
@@ -136,4 +127,5 @@
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
+
 </html>
