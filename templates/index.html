@@ -31,15 +31,22 @@
     <main class="layout">
       <section class="card login-card">
         <h2>🏥 醫師身分管理</h2>
-        <p class="muted" style="font-size: 0.9rem; margin-bottom: 20px;">使用 FIDO2 生物辨識技術確保醫療數據安全</p>
+        <p class="muted" style="font-size: 0.85rem; margin-bottom: 20px;">使用 FIDO2 生物辨識技術確保醫療數據安全</p>
 
         <div class="form-grid">
-          <button type="button" id="btnFidoReg" class="primary-btn" style="background: #3498db;">步驟 1：綁定醫師人臉</button>
-          <button type="button" id="btnFidoAuth" class="primary-btn" style="background: #16a34a;">步驟 2：驗證登入身分</button>
+          <label>
+            操作帳號
+            <input id="fidoUsername" type="text" placeholder="請輸入帳號 (例: doctor1)" required />
+          </label>
+
+          <button type="button" id="btnFidoReg" class="primary-btn" style="background: #3498db; color: white;">
+            步驟1：綁定醫師人臉</button>
+          <button type="button" id="btnFidoAuth" class="primary-btn" style="background: #16a34a; color: white;">
+            步驟2：驗證登入身分</button>
           <button type="button" id="logoutBtn" class="secondary-btn" style="margin-top: 5px;">登出系統</button>
         </div>
 
-        <div class="status-box" id="authStatus">系統就緒，請選擇操作</div>
+        <div class="status-box" id="authStatus">系統就緒，請輸入帳號後選擇操作</div>
       </section>
 
       <section class="card role-card">

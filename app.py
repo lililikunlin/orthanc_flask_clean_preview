@@ -208,52 +208,52 @@ def health_check():
 
 @app.route('/api/register/begin', methods=['POST'])
 def register_begin():
-    """初始化註冊：建立醫師金鑰綁定挑戰碼"""
     try:
-        # 對齊組員 A 的 DEMO_USERS，建立指定 doctor1 醫師節點
-        user = {'id': b'doctor1', 'name': 'doctor1', 'displayName': '陳醫師 (FIDO2 安全綁定)'}
+        # 1. 接收前端傳來的帳號
+        data = request.json
+        username = data.get('username')
+        if not username or username not in DEMO_USERS:
+            return jsonify({"ok": False, "status": "error", "message": "無效的帳號或查無此人"}), 400
+
+        # 2. 動態建立 user 資訊
+        # 將字串編碼為 bytes 作為 FIDO2 的內部 ID
+        user_id_bytes = username.encode('utf-8')
+        user = {'id': user_id_bytes, 'name': username, 'displayName': f"{username} (FIDO2)"}
         
-        # 呼叫 FIDO2 核心伺服器出題
         registration_data, state = server.register_begin(user)
         
-        # 將臨時狀態鎖在記憶體中，防止重放攻擊與 Cookie 失真
-        states['doctor1'] = state 
+        # 3. 用動態 username 作為 Key 來存狀態
+        states[username] = state 
         
-        # 提取 publicKey 結構，並透過智慧型 Websafe 進行 Base64URL 轉碼
         output = registration_data['publicKey']
         output['challenge'] = to_websafe(output['challenge'])
         output['user']['id'] = to_websafe(output['user']['id'])
         
         return jsonify(output)
     except Exception as e:
-        print(f"❌ FIDO2 註冊出題失敗: {e}")
-        return jsonify({"ok": False, "status": "error", "message": f"初始化註冊失敗: {str(e)}"}), 500
+        return jsonify({"ok": False, "status": "error", "message": str(e)}), 500
 
 
 @app.route('/api/register/complete', methods=['POST'])
 def register_complete():
-    """收卷註冊：驗證客戶端硬體人臉簽章，並儲存公鑰鎖頭"""
     credential_data = request.json
-    state = states.get('doctor1') # 撈出對應的臨時考題
+    username = credential_data.get('username') # 拿回帳號
+    state = states.get(username) # 撈出對應的考題
     
     if not state:
-        return jsonify({"ok": False, "status": "error", "message": "找不到註冊驗證狀態，請重試"}), 400
+        return jsonify({"ok": False, "status": "error", "message": "狀態已過期，請重試"}), 400
 
     try:
-        # 加密學校驗：檢查 Challenge 與客戶端 Attestation 簽章
         auth_data = server.register_complete(state, credential_data)
         
-        # 【重要】將硬體信賴公鑰存入模擬資料庫（未來可改寫至 SQLite 實體資料庫）
-        db["doctor1"] = [auth_data.credential_data]
+        # 存入對應帳號的公鑰
+        db[username] = [auth_data.credential_data]
+        del states[username] 
         
-        # 拋棄已使用的挑戰碼，確保一次性會話安全
-        del states['doctor1'] 
-        
-        print("✅ FIDO2 註冊成功：已在安全網關內儲存 doctor1 的生物辨識公鑰")
-        return jsonify({"ok": True, "status": "success", "message": "人臉憑證綁定成功"})
+        print(f"✅ FIDO2 註冊成功：已儲存 {username} 的公鑰")
+        return jsonify({"ok": True, "status": "success"})
     except Exception as e:
-        print(f"❌ FIDO2 註冊校驗失敗: {e}")
-        return jsonify({"ok": False, "status": "error", "message": f"資安校驗失敗: {str(e)}"}), 400
+        return jsonify({"ok": False, "status": "error", "message": str(e)}), 400
 
 
 # -------------------------------------------------------------
@@ -262,16 +262,17 @@ def register_complete():
 
 @app.route('/api/authenticate/begin', methods=['POST'])
 def authenticate_begin():
-    """初始化驗證：查詢醫師公鑰，並發起隨機挑戰碼"""
-    credentials = db.get("doctor1", [])
-    if not credentials:
-        return jsonify({"ok": False, "status": "error", "message": "此系統尚未綁定醫師人臉資訊，請先執行步驟 1"}), 404
-
-    # 發起驗證挑戰
-    auth_data, state = server.authenticate_begin(credentials)
-    states['doctor1'] = state # 快取狀態
+    data = request.json
+    username = data.get('username')
     
-    # 格式化輸出，告知網頁端允許使用哪一組 Credential ID 進行簽章
+    # 查詢這個帳號是否綁過人臉
+    credentials = db.get(username, [])
+    if not credentials:
+        return jsonify({"ok": False, "status": "error", "message": f"帳號 [{username}] 尚未綁定人臉，請先註冊"}), 404
+
+    auth_data, state = server.authenticate_begin(credentials)
+    states[username] = state # 動態存狀態
+    
     output = auth_data['publicKey']
     output['challenge'] = to_websafe(output['challenge'])
     if 'allowCredentials' in output:
@@ -283,37 +284,41 @@ def authenticate_begin():
 
 @app.route('/api/authenticate/complete', methods=['POST'])
 def authenticate_complete():
-    """收卷驗證：拿資料庫公鑰解開前端人臉私鑰簽章，通過則核發 Orthanc 權限"""
     credential_data = request.json
-    state = states.get('doctor1')
-    credentials = db.get("doctor1", [])
+    username = credential_data.get('username')
+    state = states.get(username)
+    credentials = db.get(username, [])
     
     if not state:
-        return jsonify({"ok": False, "status": "error", "message": "驗證會話已過期或不存在"}), 400
+        return jsonify({"ok": False, "status": "error", "message": "驗證會話已過期"}), 400
     
     try:
-        # 1. 執行密碼學驗證 (利用數學公式檢驗這次的 Assertion 簽章是否由綁定的私鑰產出)
+        # 校驗人臉簽章
         server.authenticate_complete(state, credentials, credential_data)
-        del states['doctor1'] # 刪除防重放狀態
+        del states[username] 
         
-        # 2. 【核心大合體】驗證通過，直接注入組員 A 設計的 Session 結構！
-        # 讓這張「通過生物辨識的臉」完全繼承 doctor1 帳號的所有合法屬性
-        session["user"] = {"username": "doctor1", "role": "doctor"}
+        # 【動態核發權限】從 DEMO_USERS 撈出這個人的真實角色
+        user_info = DEMO_USERS.get(username)
+        if not user_info:
+            return jsonify({"ok": False, "status": "error", "message": "系統內部錯誤：找不到使用者屬性"}), 500
+            
+        real_role = user_info["role"]
         
-        print("🔓 FIDO2 驗證成功：確認為陳醫師本人，已安全放行 Orthanc 影像管理權限")
+        # 動態寫入 Session！(如果是 admin1 登入，就會拿到 admin 權限)
+        session["user"] = {"username": username, "role": real_role}
         
-        # 3. 回傳格式完全契合組員 A 的前端解構需求 (完美相容 app.js 邏輯)
+        print(f"🔓 FIDO2 驗證成功：已登入 {username} (權限: {real_role})")
+        
         return jsonify({
             "ok": True,
             "status": "success",
-            "message": "FIDO2 生物辨識成功，已載入安全權限",
+            "message": "FIDO2 生物辨識成功",
             "user": session["user"],
-            "permissions": get_permissions("doctor"),
-            "role_label": ROLE_LABELS.get("doctor", "doctor")
+            "permissions": get_permissions(real_role),
+            "role_label": ROLE_LABELS.get(real_role, real_role)
         })
     except Exception as e:
-        print(f"❌ FIDO2 登入驗證失敗: {e}")
-        return jsonify({"ok": False, "status": "error", "message": f"人臉簽章不匹配: {str(e)}"}), 400
+        return jsonify({"ok": False, "status": "error", "message": str(e)}), 400
 
 
 # -------------------------------------------------------------

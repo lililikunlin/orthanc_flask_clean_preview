@@ -425,13 +425,26 @@ window.deleteInstance = deleteInstance;
 });*/
 async function doAction(type) {
   const isReg = type === 'register';
+  // 1. 【關鍵】取得使用者輸入的帳號
+  const usernameInput = document.getElementById("fidoUsername").value.trim();
+  
+  if (!usernameInput) {
+      setAuthMessage("❌ 請先輸入操作帳號！", true);
+      return;
+  }
+
   try {
     setAuthMessage(`正在初始化${isReg ? '註冊' : '驗證'}...`);
 
-    // 1. Begin
-    const beginRes = await apiFetch(`/api/${type}/begin`, { method: 'POST' });
-    const options = beginRes; // 注意這裡：因為組員A的 fetch 有包裝過，可能直接回傳 data
+    // 2. 【關鍵】將 username 作為 Payload 傳給後端
+    const beginRes = await apiFetch(`/api/${type}/begin`, { 
+        method: 'POST',
+        body: JSON.stringify({ username: usernameInput }) // 傳送帳號
+    });
+    
+    const options = beginRes; 
 
+    // --- 翻譯選項 ---
     options.challenge = bufferDecode(options.challenge);
     if (isReg) {
       options.user.id = bufferDecode(options.user.id);
@@ -441,13 +454,17 @@ async function doAction(type) {
 
     setAuthMessage("請看向鏡頭進行掃描...");
 
-    // 2. 呼叫硬體
+    // --- 呼叫硬體 ---
     const credential = isReg 
         ? await navigator.credentials.create({ publicKey: options })
         : await navigator.credentials.get({ publicKey: options });
 
     setAuthMessage("正在進行資安校驗...");
+    
+    // --- 打包成績單 ---
     const body = {
+      // 這裡也要把 username 傳過去，讓後端知道是誰的成績單
+      username: usernameInput, 
       id: credential.id,
       rawId: bufferEncode(credential.rawId),
       type: credential.type,
@@ -462,7 +479,7 @@ async function doAction(type) {
       }
     };
 
-    // 3. Complete
+    // --- 收卷校驗 ---
     const completeRes = await apiFetch(`/api/${type}/complete`, {
         method: 'POST',
         body: JSON.stringify(body)
@@ -470,15 +487,15 @@ async function doAction(type) {
 
     if (completeRes.ok || completeRes.status === "success") {
         if (isReg) {
-            setAuthMessage("✅ FIDO2 註冊成功！現在可以使用驗證登入了。");
+            setAuthMessage(`✅ 帳號 [${usernameInput}] 人臉綁定成功！`);
+            document.getElementById("fidoUsername").value = ""; // 清空輸入框
         } else {
-            // 【合體關鍵】驗證成功後，接手組員A的 UI 更新邏輯
             currentUser = completeRes.user;
             currentPermissions = completeRes.permissions || [];
             setAuthMessage(`✅ FIDO2 登入成功：${currentUser.username}（${completeRes.role_label}）`);
             renderRoleInfo();
             resetDetail();
-            await loadStudies(); // 登入成功自動載入醫療影像！
+            await loadStudies(); 
         }
     }
   } catch (error) {
