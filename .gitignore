@@ -22,3 +22,9 @@ Thumbs.db
 # 5. 測試或暫存的 DICOM 影像檔（避免不小心流出醫療隱私資料）
 *.dcm
 *.zip
+
+# 6. 本機資料庫檔案（【重要】防止 FIDO2 憑證與帳號資料外洩）
+*.db
+*.sqlite
+*.sqlite3
+medical.db

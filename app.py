@@ -1,6 +1,7 @@
 import os
 from functools import wraps
 from io import BytesIO
+import sqlite3 #資料庫套件
 
 import requests
 from dotenv import load_dotenv
@@ -8,8 +9,8 @@ from flask import Flask, Response, jsonify, render_template, request, send_file,
 from flask_cors import CORS
 
 from fido2.server import Fido2Server
-from fido2.webauthn import PublicKeyCredentialRpEntity
-from fido2.utils import websafe_encode
+from fido2.webauthn import PublicKeyCredentialRpEntity, AttestedCredentialData
+from fido2.utils import websafe_encode, websafe_decode
 
 try:
     from PIL import Image
@@ -41,14 +42,9 @@ ORTHANC_USERNAME = os.getenv("ORTHANC_USERNAME", "")
 ORTHANC_PASSWORD = os.getenv("ORTHANC_PASSWORD", "")
 ORTHANC_VERIFY_SSL = os.getenv("ORTHANC_VERIFY_SSL", "true").lower() == "true"
 
-DEMO_USERS = {
-    "patient1": {"password": "1234", "role": "patient"},
-    "doctor1": {"password": "1234", "role": "doctor"},
-    "admin1": {"password": "1234", "role": "admin"},
-}
-#新增 FIDO2 的初始化與資料庫
-db = {}      # 存 FIDO2 公鑰
-states = {}  # 存 FIDO2 挑戰狀態
+# --- FIDO2 的初始化與狀態 ---
+states = {}  # 存 FIDO2 挑戰狀態 (臨時考卷，放記憶體即可)
+
 rp = PublicKeyCredentialRpEntity(id="localhost", name="遠距醫療安全網關")
 server = Fido2Server(rp)
 
@@ -56,6 +52,45 @@ def to_websafe(data):
     if isinstance(data, str): return data
     if isinstance(data, bytes): return websafe_encode(data)
     return data
+
+# --- 【新增】SQLite 資料庫設定 ---
+DB_FILE = "medical.db"
+
+def init_db():
+    """初始化資料庫表，如果不存在就建立"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    
+    # 表格 1：credentials (負責 Authentication 身分驗證)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS credentials (
+            username TEXT PRIMARY KEY,
+            credential_data TEXT NOT NULL
+        )
+    ''')
+    
+    # 表格 2：users (負責 Authorization 角色權限)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            role TEXT NOT NULL
+        )
+    ''')
+    
+    # 【自動植入】如果 users 表是空的，就自動建立預設的三個角色
+    c.execute("SELECT count(*) FROM users")
+    if c.fetchone()[0] == 0:
+        c.executemany("INSERT INTO users (username, role) VALUES (?, ?)", [
+            ("patient1", "patient"),
+            ("doctor1", "doctor"),
+            ("admin1", "admin")
+        ])
+        
+    conn.commit()
+    conn.close()
+
+# 啟動時立刻初始化資料庫
+init_db()
 
 ROLE_PERMISSIONS = {
     "patient": ["view", "modify", "delete"],
@@ -212,8 +247,19 @@ def register_begin():
         # 1. 接收前端傳來的帳號
         data = request.json
         username = data.get('username')
-        if not username or username not in DEMO_USERS:
-            return jsonify({"ok": False, "status": "error", "message": "無效的帳號或查無此人"}), 400
+        
+        if not username:
+            return jsonify({"ok": False, "status": "error", "message": "請輸入操作帳號"}), 400
+
+        # 【全新修改】去 SQLite 的 users 表檢查這個帳號是否合法
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM users WHERE username=?", (username,))
+        user_exists = c.fetchone()
+        conn.close()
+
+        if not user_exists:
+            return jsonify({"ok": False, "status": "error", "message": "無效的帳號：系統中查無此人員"}), 400
 
         # 2. 動態建立 user 資訊
         # 將字串編碼為 bytes 作為 FIDO2 的內部 ID
@@ -237,22 +283,32 @@ def register_begin():
 @app.route('/api/register/complete', methods=['POST'])
 def register_complete():
     credential_data = request.json
-    username = credential_data.get('username') # 拿回帳號
-    state = states.get(username) # 撈出對應的考題
+    username = credential_data.get('username')
+    state = states.get(username)
     
     if not state:
         return jsonify({"ok": False, "status": "error", "message": "狀態已過期，請重試"}), 400
 
     try:
+        # 校驗 FIDO2 註冊資料
         auth_data = server.register_complete(state, credential_data)
         
-        # 存入對應帳號的公鑰
-        db[username] = [auth_data.credential_data]
-        del states[username] 
+        # 【修改】將公鑰資料 (bytes) 轉為可儲存的 Base64 字串
+        cred_bytes = auth_data.credential_data
+        cred_b64 = websafe_encode(cred_bytes)
         
-        print(f"✅ FIDO2 註冊成功：已儲存 {username} 的公鑰")
+        # 【修改】寫入 SQLite 資料庫 (如果帳號已存在則覆蓋更新)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("REPLACE INTO credentials (username, credential_data) VALUES (?, ?)", (username, cred_b64))
+        conn.commit()
+        conn.close()
+
+        del states[username] 
+        print(f"✅ FIDO2 註冊成功：已在 SQLite 儲存 {username} 的公鑰")
         return jsonify({"ok": True, "status": "success"})
     except Exception as e:
+        print(f"❌ 註冊失敗: {e}")
         return jsonify({"ok": False, "status": "error", "message": str(e)}), 400
 
 
@@ -265,13 +321,24 @@ def authenticate_begin():
     data = request.json
     username = data.get('username')
     
-    # 查詢這個帳號是否綁過人臉
-    credentials = db.get(username, [])
-    if not credentials:
+    # 【修改】從 SQLite 讀取公鑰
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT credential_data FROM credentials WHERE username=?", (username,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
         return jsonify({"ok": False, "status": "error", "message": f"帳號 [{username}] 尚未綁定人臉，請先註冊"}), 404
 
+    # 將字串還原為 FIDO2 套件看得懂的格式
+    cred_bytes = websafe_decode(row[0])
+    # 注意：fido2 authenticate_begin 參數要求的是 list
+    credentials = [AttestedCredentialData(cred_bytes)] 
+
+    # 發起驗證挑戰
     auth_data, state = server.authenticate_begin(credentials)
-    states[username] = state # 動態存狀態
+    states[username] = state 
     
     output = auth_data['publicKey']
     output['challenge'] = to_websafe(output['challenge'])
@@ -287,24 +354,39 @@ def authenticate_complete():
     credential_data = request.json
     username = credential_data.get('username')
     state = states.get(username)
-    credentials = db.get(username, [])
     
     if not state:
         return jsonify({"ok": False, "status": "error", "message": "驗證會話已過期"}), 400
+    
+    # 【修改】從 SQLite 讀取公鑰
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT credential_data FROM credentials WHERE username=?", (username,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+         return jsonify({"ok": False, "status": "error", "message": "找不到公鑰資料"}), 404
+         
+    cred_bytes = websafe_decode(row[0])
+    credentials = [AttestedCredentialData(cred_bytes)]
     
     try:
         # 校驗人臉簽章
         server.authenticate_complete(state, credentials, credential_data)
         del states[username] 
         
-        # 【動態核發權限】從 DEMO_USERS 撈出這個人的真實角色
-        user_info = DEMO_USERS.get(username)
-        if not user_info:
-            return jsonify({"ok": False, "status": "error", "message": "系統內部錯誤：找不到使用者屬性"}), 500
+        #【全新架構】從 SQLite 資料庫的 users 表中查詢該人員的角色
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT role FROM users WHERE username=?", (username,))
+        user_row = c.fetchone()
+        conn.close()
+
+        if not user_row:
+            return jsonify({"ok": False, "status": "error", "message": "資料庫查無此使用者的權限設定"}), 500
             
-        real_role = user_info["role"]
-        
-        # 動態寫入 Session！(如果是 admin1 登入，就會拿到 admin 權限)
+        real_role = user_row[0] # 從資料庫拿到的真實角色 (doctor, admin, patient)
         session["user"] = {"username": username, "role": real_role}
         
         print(f"🔓 FIDO2 驗證成功：已登入 {username} (權限: {real_role})")
@@ -318,6 +400,7 @@ def authenticate_complete():
             "role_label": ROLE_LABELS.get(real_role, real_role)
         })
     except Exception as e:
+        print(f"❌ 驗證失敗: {e}")
         return jsonify({"ok": False, "status": "error", "message": str(e)}), 400
 
 
