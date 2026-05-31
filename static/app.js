@@ -115,6 +115,9 @@ function resetDetail() {
 }
 
 function renderRoleInfo() {
+  const infoEl = document.getElementById("roleInfo");
+  const badgesEl = document.getElementById("permissionBadges");
+  const adminSection = document.getElementById("adminSection"); // 抓取管理面板
   if (!currentUser) {
     roleInfo.innerHTML = '<span class="muted">尚未登入</span>';
     permissionBadges.innerHTML = '<span class="permission-chip chip-muted">請先登入</span>';
@@ -128,6 +131,14 @@ function renderRoleInfo() {
     .join("");
 
   uploadSection.hidden = !hasPermission("upload");
+
+  //檢查是否為管理員，是的話就秀出後台，並載入使用者清單
+  if (currentUser.role === 'admin' || currentPermissions.includes('manage_users')) {
+      adminSection.hidden = false;
+      loadAdminUsers(); // 呼叫載入清單 API
+  } else {
+      adminSection.hidden = true;
+  }
 }
 
 function renderStudies(studies) {
@@ -246,6 +257,63 @@ async function refreshMe() {
   }
 
   renderRoleInfo();
+}
+
+// ==========================================
+// 👑 管理員後台專用邏輯
+// ==========================================
+
+// 1. 載入並渲染所有使用者清單
+async function loadAdminUsers() {
+  const tbody = document.getElementById("usersTableBody");
+  try {
+    const res = await apiFetch("/api/admin/users", { method: "GET" });
+    if (!res.ok) throw new Error(res.message);
+
+    tbody.innerHTML = "";
+    if (res.users.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-cell">目前系統無任何帳號</td></tr>';
+      return;
+    }
+
+    res.users.forEach(u => {
+      const tr = document.createElement("tr");
+      // 用 emoji 標示綁定狀態
+      const fidoStatus = u.has_fido ? "✅ 已綁定" : "❌ 未註冊";
+      // 避免管理員刪除自己
+      const isSelf = (currentUser && currentUser.username === u.username);
+      const delBtnHtml = isSelf ? 
+          `<span class="muted" style="font-size:0.8rem;">(目前登入中)</span>` : 
+          `<button class="danger-btn inline-btn" onclick="deleteUser('${u.username}')">刪除帳號</button>`;
+
+      tr.innerHTML = `
+        <td><strong>${u.username}</strong></td>
+        <td><span class="permission-chip">${u.role}</span></td>
+        <td>${fidoStatus}</td>
+        <td>${delBtnHtml}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="empty-cell" style="color:red;">載入失敗：${err.message}</td></tr>`;
+  }
+}
+
+// 2. 刪除使用者
+async function deleteUser(username) {
+  if (!confirm(`⚠️ 警告：確定要徹底刪除帳號 [${username}] 與其綁定的人臉資料嗎？此操作無法還原！`)) return;
+  
+  try {
+    const res = await apiFetch(`/api/admin/users/${username}`, { method: "DELETE" });
+    if (res.ok) {
+      alert(res.message);
+      loadAdminUsers(); // 重新整理表格
+    } else {
+      alert(`刪除失敗: ${res.message}`);
+    }
+  } catch (err) {
+    alert(`系統錯誤: ${err.message}`);
+  }
 }
 
 async function loadStudies() {
@@ -558,6 +626,33 @@ uploadForm.addEventListener("submit", async (event) => {
     setUploadMessage(error.message, true);
   }
 });
+
+// 綁定「新增/修改帳號」表單
+const adminUserForm = document.getElementById("adminUserForm");
+if (adminUserForm) {
+  adminUserForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = document.getElementById("newUsername").value.trim();
+    const role = document.getElementById("newUserRole").value;
+
+    try {
+      const res = await apiFetch("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify({ username, role })
+      });
+
+      if (res.ok) {
+        alert(res.message);
+        document.getElementById("newUsername").value = ""; // 清空輸入框
+        loadAdminUsers(); // 重新整理表格
+      } else {
+        alert(`設定失敗: ${res.message}`);
+      }
+    } catch (err) {
+      alert(`系統錯誤: ${err.message}`);
+    }
+  });
+}
 
 checkHealth();
 refreshMe();

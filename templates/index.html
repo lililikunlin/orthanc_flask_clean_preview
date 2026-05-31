@@ -28,108 +28,160 @@
       </div>
     </header>
 
-    <main class="layout">
-      <section class="card login-card">
-        <h2>🏥 醫師身分管理</h2>
-        <p class="muted" style="font-size: 0.85rem; margin-bottom: 20px;">使用 FIDO2 生物辨識技術確保醫療數據安全</p>
+    <main class="layout" style="display: flex; gap: 20px; align-items: flex-start; max-width: 1400px; margin: 0 auto; width: 100%;">
+      
+      <div class="sidebar" style="flex: 0 0 350px; display: flex; flex-direction: column; gap: 20px;">
+        
+        <section class="card login-card">
+          <h2>🏥 醫師身分管理</h2>
+          <p class="muted" style="font-size: 0.85rem; margin-bottom: 20px;">使用 FIDO2 生物辨識技術確保醫療數據安全</p>
 
-        <div class="form-grid">
-          <label>
-            操作帳號
-            <input id="fidoUsername" type="text" placeholder="請輸入帳號 (例: doctor1)" required />
-          </label>
+          <div class="form-grid">
+            <label>
+              操作帳號
+              <input id="fidoUsername" type="text" placeholder="請輸入帳號 (例: doctor1)" required />
+            </label>
 
-          <button type="button" id="btnFidoReg" class="primary-btn" style="background: #3498db; color: white;">
-            步驟1：綁定醫師人臉</button>
-          <button type="button" id="btnFidoAuth" class="primary-btn" style="background: #16a34a; color: white;">
-            步驟2：驗證登入身分</button>
-          <button type="button" id="logoutBtn" class="secondary-btn" style="margin-top: 5px;">登出系統</button>
-        </div>
+            <button type="button" id="btnFidoReg" class="primary-btn" style="background: #3498db; color: white;">
+              步驟1：綁定醫師人臉</button>
+            <button type="button" id="btnFidoAuth" class="primary-btn" style="background: #16a34a; color: white;">
+              步驟2：驗證登入身分</button>
+            <button type="button" id="logoutBtn" class="secondary-btn" style="margin-top: 5px;">登出系統</button>
+          </div>
 
-        <div class="status-box" id="authStatus">系統就緒，請輸入帳號後選擇操作</div>
-      </section>
+          <div class="status-box" id="authStatus">系統就緒，請輸入帳號後選擇操作</div>
+        </section>
 
-      <section class="card role-card">
-        <h2>角色權限</h2>
-        <div id="roleInfo" class="role-info muted">尚未登入</div>
-        <div id="permissionBadges" class="permission-row">
-          <span class="permission-chip chip-muted">請先登入</span>
-        </div>
-      </section>
+        <section class="card role-card">
+          <h2>角色權限</h2>
+          <div id="roleInfo" class="role-info muted">尚未登入</div>
+          <div id="permissionBadges" class="permission-row">
+            <span class="permission-chip chip-muted">請先登入</span>
+          </div>
+        </section>
 
-      <section class="card upload-card" id="uploadSection" hidden>
-        <h2>新增 DICOM</h2>
+        <section class="card upload-card" id="uploadSection" hidden>
+          <h2>新增 DICOM</h2>
 
-        <form id="uploadForm" class="form-grid">
-          <label>
-            選擇 DICOM 檔
-            <input id="dicomFile" name="dicomFile" type="file" accept=".dcm,application/dicom" />
-          </label>
+          <form id="uploadForm" class="form-grid">
+            <label>
+              選擇 DICOM 檔
+              <input id="dicomFile" name="dicomFile" type="file" accept=".dcm,application/dicom" />
+            </label>
 
-          <button type="submit" class="primary-btn">加入 DICOM</button>
-        </form>
+            <button type="submit" class="primary-btn">加入 DICOM</button>
+          </form>
 
-        <div class="status-box" id="uploadStatus">等待上傳</div>
-      </section>
+          <div class="status-box" id="uploadStatus">等待上傳</div>
+        </section>
 
-      <section class="card studies-card">
-        <div class="section-header">
-          <h2>Study 清單</h2>
-          <button id="loadStudiesBtn" class="primary-btn">載入 Studies</button>
-        </div>
+      </div>
+      <div class="main-content" style="flex: 1; display: flex; flex-direction: column; gap: 20px; min-width: 0;">
+        
+        <section class="card admin-card" id="adminSection" hidden>
+          <div class="section-header">
+            <h2>👑 系統帳號管理 (Admin Only)</h2>
+          </div>
+          
+          <p class="muted" style="font-size: 0.85rem; margin-bottom: 15px;">新增使用者、設定系統角色，或刪除離職員工的 FIDO2 綁定紀錄。</p>
 
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Study ID</th>
-                <th>Patient</th>
-                <th>Date</th>
-                <th>Description</th>
-                <th>Instances</th>
-                <th>操作</th>
-              </tr>
-            </thead>
+          <form id="adminUserForm" class="form-grid" style="margin-bottom: 20px; padding: 15px; background: rgba(0,0,0,0.03); border-radius: 8px;">
+            <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+              <label style="flex: 1; min-width: 200px;">
+                帳號名稱
+                <input id="newUsername" type="text" placeholder="例如 nurse1" required />
+              </label>
+              <label style="flex: 1; min-width: 150px;">
+                指派角色
+                <select id="newUserRole" required style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+                  <option value="doctor">醫師 (doctor)</option>
+                  <option value="patient">病患 (patient)</option>
+                  <option value="admin">管理員 (admin)</option>
+                </select>
+              </label>
+              <button type="submit" class="primary-btn" style="height: 38px; margin-bottom: 0;">加入 / 更新</button>
+            </div>
+          </form>
 
-            <tbody id="studiesTableBody">
-              <tr>
-                <td colspan="6" class="empty-cell">尚未載入資料</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>帳號名稱 (Username)</th>
+                  <th>系統角色 (Role)</th>
+                  <th>FIDO2 人臉綁定狀態</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="usersTableBody">
+                <tr>
+                  <td colspan="4" class="empty-cell">載入中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-      <section class="card detail-card">
-        <div class="section-header">
-          <h2>Study 詳細資料</h2>
-        </div>
+        <section class="card studies-card">
+          <div class="section-header">
+            <h2>Study 清單</h2>
+            <button id="loadStudiesBtn" class="primary-btn">載入 Studies</button>
+          </div>
 
-        <div id="studyMeta" class="meta-grid">
-          <div class="meta-empty">尚未選擇 study</div>
-        </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Study ID</th>
+                  <th>Patient</th>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th>Instances</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
 
-        <h3>Instances</h3>
+              <tbody id="studiesTableBody">
+                <tr>
+                  <td colspan="6" class="empty-cell">尚未載入資料</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-        <div id="instancesList" class="instances-grid">
-          <div class="meta-empty">尚未載入 instance</div>
-        </div>
-      </section>
+        <section class="card detail-card">
+          <div class="section-header">
+            <h2>Study 詳細資料</h2>
+          </div>
 
-      <section class="card preview-card">
-        <div class="section-header">
-          <h2>影像預覽</h2>
-          <button id="clearPreviewBtn" class="secondary-btn inline-btn">清除預覽</button>
-        </div>
+          <div id="studyMeta" class="meta-grid">
+            <div class="meta-empty">尚未選擇 study</div>
+          </div>
 
-        <div class="preview-wrap">
-          <img id="previewImage" alt="DICOM preview" hidden />
-          <div id="previewPlaceholder" class="preview-placeholder">尚未選擇預覽影像</div>
-        </div>
+          <h3>Instances</h3>
 
-        <div id="previewStatus" class="status-box muted">尚未預覽</div>
-      </section>
-    </main>
+          <div id="instancesList" class="instances-grid">
+            <div class="meta-empty">尚未載入 instance</div>
+          </div>
+        </section>
+
+        <section class="card preview-card">
+          <div class="section-header">
+            <h2>影像預覽</h2>
+            <button id="clearPreviewBtn" class="secondary-btn inline-btn">清除預覽</button>
+          </div>
+
+          <div class="preview-wrap">
+            <img id="previewImage" alt="DICOM preview" hidden />
+            <div id="previewPlaceholder" class="preview-placeholder">尚未選擇預覽影像</div>
+          </div>
+
+          <div id="previewStatus" class="status-box muted">尚未預覽</div>
+        </section>
+
+      </div>
+      </main>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

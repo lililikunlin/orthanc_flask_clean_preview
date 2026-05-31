@@ -95,7 +95,7 @@ init_db()
 ROLE_PERMISSIONS = {
     "patient": ["view", "modify", "delete"],
     "doctor": ["view", "upload"],
-    "admin": ["view"],
+    "admin": ["view", "manage_users"], # 管理使用者的最高權限
 }
 
 ROLE_LABELS = {
@@ -587,6 +587,92 @@ def download_instance(instance_id):
     except requests.RequestException as exc:
         return jsonify({"ok": False, "message": f"DICOM 下載失敗：{exc}"}), 500
 
+# ==========================================
+# 管理員專屬 API (後台帳號管理系統)
+# ==========================================
+
+@app.route("/api/admin/users", methods=["GET"])
+@login_required
+@permission_required("manage_users")
+def get_all_users():
+    """1. 取得系統內所有使用者名單與角色"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        # 查詢 users 表，並看看 credentials 表有沒有綁定人臉 (用 LEFT JOIN)
+        c.execute('''
+            SELECT u.username, u.role, 
+                   CASE WHEN c.credential_data IS NOT NULL THEN 1 ELSE 0 END as has_fido 
+            FROM users u
+            LEFT JOIN credentials c ON u.username = c.username
+        ''')
+        
+        users_list = []
+        for row in c.fetchall():
+            users_list.append({
+                "username": row[0],
+                "role": row[1],
+                "has_fido": bool(row[2]) # 讓前端知道這個人綁過臉了沒
+            })
+            
+        conn.close()
+        return jsonify({"ok": True, "users": users_list})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"讀取失敗：{str(e)}"}), 500
+
+
+@app.route("/api/admin/users", methods=["POST"])
+@login_required
+@permission_required("manage_users")
+def upsert_user():
+    """2. 新增帳號，或修改現有帳號的角色"""
+    data = request.json
+    target_username = data.get("username")
+    target_role = data.get("role")
+    
+    if not target_username or not target_role:
+        return jsonify({"ok": False, "message": "必須提供 username 與 role"}), 400
+        
+    if target_role not in ROLE_PERMISSIONS:
+        return jsonify({"ok": False, "message": f"無效的角色！只能是: {list(ROLE_PERMISSIONS.keys())}"}), 400
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        # 使用 REPLACE，如果帳號存在就更新 role，不存在就新增
+        c.execute("REPLACE INTO users (username, role) VALUES (?, ?)", (target_username, target_role))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"ok": True, "message": f"成功設定帳號 [{target_username}] 為 [{target_role}] 角色！"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"設定失敗：{str(e)}"}), 500
+
+
+@app.route("/api/admin/users/<target_username>", methods=["DELETE"])
+@login_required
+@permission_required("manage_users")
+def delete_user(target_username):
+    """3. 徹底刪除帳號與其綁定的人臉公鑰"""
+    # 保護機制：不能刪除自己
+    if session.get("user", {}).get("username") == target_username:
+        return jsonify({"ok": False, "message": "安全限制：管理員無法刪除自己的帳號"}), 403
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        # 刪除權限表的資料
+        c.execute("DELETE FROM users WHERE username=?", (target_username,))
+        # 聯動刪除人臉公鑰表的資料 (重要！避免留下幽靈公鑰)
+        c.execute("DELETE FROM credentials WHERE username=?", (target_username,))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"ok": True, "message": f"已徹底刪除帳號 [{target_username}] 與其人臉綁定紀錄"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"刪除失敗：{str(e)}"}), 500
 
 # -------------------------
 # Role-based write APIs
