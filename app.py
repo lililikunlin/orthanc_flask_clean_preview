@@ -45,7 +45,7 @@ ORTHANC_VERIFY_SSL = os.getenv("ORTHANC_VERIFY_SSL", "true").lower() == "true"
 # --- FIDO2 的初始化與狀態 ---
 states = {}  # 存 FIDO2 挑戰狀態 (臨時考卷，放記憶體即可)
 
-rp = PublicKeyCredentialRpEntity(id="localhost", name="遠距醫療安全網關")
+rp = PublicKeyCredentialRpEntity(id="telemed-sec.duckdns.org", name="遠距醫療安全網關")
 server = Fido2Server(rp)
 
 def to_websafe(data):
@@ -774,4 +774,6 @@ def delete_instance(instance_id):
 
 if __name__ == "__main__":
     is_debug_mode = os.getenv("FLASK_DEBUG", "true").lower() in ["true", "1"]
-    app.run(debug=is_debug_mode, host="0.0.0.0", port=5000)
+    cert_path = '/etc/letsencrypt/live/telemed-sec.duckdns.org/fullchain.pem'
+    key_path = '/etc/letsencrypt/live/telemed-sec.duckdns.org/privkey.pem'
+    app.run(host="0.0.0.0", port=5000, ssl_context=(cert_path, key_path), debug=True)
