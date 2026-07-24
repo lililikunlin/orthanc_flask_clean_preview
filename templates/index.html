@@ -28,10 +28,11 @@
       </div>
     </header>
 
-    <main class="layout" style="display: flex; gap: 20px; align-items: flex-start; max-width: 1400px; margin: 0 auto; width: 100%;">
-      
+    <main class="layout"
+      style="display: flex; gap: 20px; align-items: flex-start; max-width: 1400px; margin: 0 auto; width: 100%;">
+
       <div class="sidebar" style="flex: 0 0 350px; display: flex; flex-direction: column; gap: 20px;">
-        
+
         <section class="card login-card">
           <h2>🏥 醫師身分管理</h2>
           <p class="muted" style="font-size: 0.85rem; margin-bottom: 20px;">使用 FIDO2 生物辨識技術確保醫療數據安全</p>
@@ -39,13 +40,18 @@
           <div class="form-grid">
             <label>
               操作帳號
-              <input id="fidoUsername" type="text" placeholder="請輸入帳號 (例: doctor1)" required />
+              <!-- 新增 list 與 autocomplete 屬性來支援下拉聯想 -->
+              <input id="fidoUsername" type="text" list="registered-users" autocomplete="off"
+                placeholder="請輸入帳號 (例: doctor1)" required />
             </label>
+            <!-- 這是用來放置已註冊名單的隱藏標籤 -->
+            <datalist id="registered-users"></datalist>
 
-            <button type="button" id="btnFidoReg" class="primary-btn" style="background: #3498db; color: white;">
-              步驟1：綁定醫師人臉</button>
-            <button type="button" id="btnFidoAuth" class="primary-btn" style="background: #16a34a; color: white;">
-              步驟2：驗證登入身分</button>
+            <!-- 將原本的兩個按鈕合併為一個智慧按鈕 -->
+            <button type="button" id="smart-login-btn" class="primary-btn" style="background: #3498db; color: white;">
+              下一步 / 登入
+            </button>
+
             <button type="button" id="logoutBtn" class="secondary-btn" style="margin-top: 5px;">登出系統</button>
           </div>
 
@@ -77,15 +83,16 @@
 
       </div>
       <div class="main-content" style="flex: 1; display: flex; flex-direction: column; gap: 20px; min-width: 0;">
-        
+
         <section class="card admin-card" id="adminSection" hidden>
           <div class="section-header">
             <h2>👑 系統帳號管理 (Admin Only)</h2>
           </div>
-          
+
           <p class="muted" style="font-size: 0.85rem; margin-bottom: 15px;">新增使用者、設定系統角色，或刪除離職員工的 FIDO2 綁定紀錄。</p>
 
-          <form id="adminUserForm" class="form-grid" style="margin-bottom: 20px; padding: 15px; background: rgba(0,0,0,0.03); border-radius: 8px;">
+          <form id="adminUserForm" class="form-grid"
+            style="margin-bottom: 20px; padding: 15px; background: rgba(0,0,0,0.03); border-radius: 8px;">
             <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
               <label style="flex: 1; min-width: 200px;">
                 帳號名稱
@@ -93,7 +100,8 @@
               </label>
               <label style="flex: 1; min-width: 150px;">
                 指派角色
-                <select id="newUserRole" required style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+                <select id="newUserRole" required
+                  style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
                   <option value="doctor">醫師 (doctor)</option>
                   <option value="patient">病患 (patient)</option>
                   <option value="admin">管理員 (admin)</option>
@@ -181,7 +189,7 @@
         </section>
 
       </div>
-      </main>
+    </main>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

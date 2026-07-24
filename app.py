@@ -236,6 +236,22 @@ def health_check():
 
     return jsonify({"ok": True, "status": status, "orthanc_error": orthanc_error})
 
+@app.route("/api/users/registered", methods=["GET"])
+def get_registered_users():
+    """取得『已經綁定生物特徵』的帳號清單，供前端自動聯想與智慧按鈕判斷使用"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT username FROM credentials")
+        rows = c.fetchall()
+        conn.close()
+        
+        # 轉換成單純的字串陣列，例如 ["doctor1", "admin1"]
+        users = [row[0] for row in rows]
+        return jsonify({"ok": True, "users": users})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
+
 
 # -------------------------------------------------------------
 # FIDO2 階段一：人臉綁定註冊 (Registration)
@@ -411,7 +427,24 @@ def authenticate_complete():
 @app.route("/api/logout", methods=["POST"])
 @login_required
 def logout():
-    """登出系統，全面清空 Session 授權狀態"""
+    """登出系統，全面清空 Session 授權狀態，並重置 guest 帳號"""
+    # 1. 先抓出現在是誰要登出
+    user = session.get("user", {})
+    username = user.get("username")
+    
+    # 2. 【關鍵重置機制】如果是 guest，刪除他綁定的生物特徵
+    if username == "guest":
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("DELETE FROM credentials WHERE username=?", (username,))
+            conn.commit()
+            conn.close()
+            print("🔄 公共帳號 guest 已登出，人臉資料已成功重置！")
+        except Exception as e:
+            print(f"guest 重置失敗: {e}")
+
+    # 3. 清空登入狀態，並走到最後的「出口 (return)」
     session.clear()
     return jsonify({"ok": True, "message": "已登出安全網關"})
 
@@ -673,6 +706,28 @@ def delete_user(target_username):
         return jsonify({"ok": True, "message": f"已徹底刪除帳號 [{target_username}] 與其人臉綁定紀錄"})
     except Exception as e:
         return jsonify({"ok": False, "message": f"刪除失敗：{str(e)}"}), 500
+    
+@app.route("/api/admin/users/<target_username>/fido", methods=["DELETE"])
+@login_required
+@permission_required("manage_users")
+def reset_user_fido(target_username):
+    """4. 僅清除人臉綁定紀錄，保留帳號與角色"""
+    # 保護機制：不能重置自己，以免管理員把自己鎖在門外
+    if session.get("user", {}).get("username") == target_username:
+        return jsonify({"ok": False, "message": "安全限制：管理員無法重置自己的人臉"}), 403
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        # 僅刪除 credentials (公鑰) 表中的資料
+        c.execute("DELETE FROM credentials WHERE username=?", (target_username,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"ok": True, "message": f"已成功清除 [{target_username}] 的人臉綁定紀錄，該帳號下次登入將重新啟動註冊流程。"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"清除失敗：{str(e)}"}), 500
 
 # -------------------------
 # Role-based write APIs

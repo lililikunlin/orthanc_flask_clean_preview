@@ -122,6 +122,7 @@ function renderRoleInfo() {
     roleInfo.innerHTML = '<span class="muted">尚未登入</span>';
     permissionBadges.innerHTML = '<span class="permission-chip chip-muted">請先登入</span>';
     uploadSection.hidden = true;
+    adminSection.hidden = true;
     return;
   }
 
@@ -280,17 +281,28 @@ async function loadAdminUsers() {
       const tr = document.createElement("tr");
       // 用 emoji 標示綁定狀態
       const fidoStatus = u.has_fido ? "✅ 已綁定" : "❌ 未註冊";
-      // 避免管理員刪除自己
+      // 避免管理員刪除/重置自己
       const isSelf = (currentUser && currentUser.username === u.username);
-      const delBtnHtml = isSelf ? 
-          `<span class="muted" style="font-size:0.8rem;">(目前登入中)</span>` : 
-          `<button class="danger-btn inline-btn" onclick="deleteUser('${u.username}')">刪除帳號</button>`;
+      
+      // 動態產生操作按鈕
+      let actionButtons = "";
+      if (isSelf) {
+          actionButtons = `<span class="muted" style="font-size:0.8rem;">(目前登入中)</span>`;
+      } else {
+          // 如果已經綁定人臉，就顯示「清除人臉」按鈕
+          const unbindBtn = u.has_fido 
+            ? `<button class="secondary-btn inline-btn" onclick="resetUserFido('${u.username}')" style="margin-right: 8px;">清除人臉</button>` 
+            : "";
+          const deleteBtn = `<button class="danger-btn inline-btn" onclick="deleteUser('${u.username}')">刪除帳號</button>`;
+          
+          actionButtons = unbindBtn + deleteBtn;
+      }
 
       tr.innerHTML = `
         <td><strong>${u.username}</strong></td>
         <td><span class="permission-chip">${u.role}</span></td>
         <td>${fidoStatus}</td>
-        <td>${delBtnHtml}</td>
+        <td>${actionButtons}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -310,6 +322,23 @@ async function deleteUser(username) {
       loadAdminUsers(); // 重新整理表格
     } else {
       alert(`刪除失敗: ${res.message}`);
+    }
+  } catch (err) {
+    alert(`系統錯誤: ${err.message}`);
+  }
+}
+
+// 3. 清除使用者人臉綁定 (保留帳號)
+async function resetUserFido(username) {
+  if (!confirm(`確定要清除帳號 [${username}] 的人臉綁定紀錄嗎？\n(帳號與權限將會保留，該人員下次操作需重新綁定人臉)`)) return;
+  
+  try {
+    const res = await apiFetch(`/api/admin/users/${username}/fido`, { method: "DELETE" });
+    if (res.ok) {
+      alert(res.message);
+      loadAdminUsers(); // 重新整理表格
+    } else {
+      alert(`清除失敗: ${res.message}`);
     }
   } catch (err) {
     alert(`系統錯誤: ${err.message}`);
@@ -557,6 +586,7 @@ async function doAction(type) {
         if (isReg) {
             setAuthMessage(`✅ 帳號 [${usernameInput}] 人臉綁定成功！`);
             document.getElementById("fidoUsername").value = ""; // 清空輸入框
+            registeredUsersList.push(usernameInput);
         } else {
             currentUser = completeRes.user;
             currentPermissions = completeRes.permissions || [];
@@ -574,9 +604,51 @@ async function doAction(type) {
   }
 }
 
-// 綁定按鈕事件 (對應到 index.html 的按鈕)
-document.getElementById("btnFidoReg").addEventListener("click", () => doAction('register'));
-document.getElementById("btnFidoAuth").addEventListener("click", () => doAction('authenticate'));
+// ==========================================
+// 🧠 智慧單一按鈕與聯想清單邏輯
+// ==========================================
+
+// 用來儲存「已經綁定過人臉」的帳號清單
+let registeredUsersList = [];
+
+// 當網頁載入時，自動去後端撈取已註冊的帳號清單
+document.addEventListener("DOMContentLoaded", async () => {
+    try {
+        const res = await apiFetch('/api/users/registered', { method: 'GET' });
+        if (res.ok && res.users) {
+            registeredUsersList = res.users; // 存入記憶體供按鈕判斷使用
+            
+            // 將名單塞入 HTML 的 datalist 中，製作下拉聯想效果
+            const datalist = document.getElementById('registered-users');
+            res.users.forEach(username => {
+                const option = document.createElement('option');
+                option.value = username;
+                datalist.appendChild(option);
+            });
+        }
+    } catch (err) {
+        console.error("無法載入帳號聯想清單:", err);
+    }
+});
+
+// 綁定智慧按鈕事件
+document.getElementById("smart-login-btn").addEventListener("click", () => {
+    const usernameInput = document.getElementById("fidoUsername").value.trim();
+    
+    if (!usernameInput) {
+        setAuthMessage("❌ 請先輸入操作帳號！", true);
+        return;
+    }
+
+    // 關鍵判斷：輸入的帳號有沒有在已註冊清單裡面？
+    if (registeredUsersList.includes(usernameInput)) {
+        // 在清單內 -> 已經綁過人臉，直接執行登入 (authenticate)
+        doAction('authenticate');
+    } else {
+        // 不在清單內 -> 尚未綁過人臉，執行註冊綁定 (register)
+        doAction('register');
+    }
+});
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   try {
