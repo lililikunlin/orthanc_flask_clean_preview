@@ -308,21 +308,41 @@ def register_complete():
     try:
         # 校驗 FIDO2 註冊資料
         auth_data = server.register_complete(state, credential_data)
-        
-        # 【修改】將公鑰資料 (bytes) 轉為可儲存的 Base64 字串
         cred_bytes = auth_data.credential_data
         cred_b64 = websafe_encode(cred_bytes)
         
-        # 【修改】寫入 SQLite 資料庫 (如果帳號已存在則覆蓋更新)
+        # 寫入 SQLite 資料庫
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("REPLACE INTO credentials (username, credential_data) VALUES (?, ?)", (username, cred_b64))
+        
+        # 自動登入
+        c.execute("SELECT role FROM users WHERE username=?", (username,))
+        user_row = c.fetchone()
         conn.commit()
         conn.close()
 
         del states[username] 
-        print(f"✅ FIDO2 註冊成功：已在 SQLite 儲存 {username} 的公鑰")
-        return jsonify({"ok": True, "status": "success"})
+        
+        if not user_row:
+            return jsonify({"ok": False, "status": "error", "message": "資料庫查無此使用者的權限設定"}), 500
+            
+        # 核發 Session 通行證
+        real_role = user_row[0] 
+        session["user"] = {"username": username, "role": real_role}
+        
+        print(f"✅ FIDO2 註冊成功並自動登入：{username} (權限: {real_role})")
+        
+        # 【修改回傳格式】比照 authenticate_complete，把 user 資料傳給前端
+        return jsonify({
+            "ok": True,
+            "status": "success",
+            "message": "FIDO2 註冊並自動登入成功",
+            "user": session["user"],
+            "permissions": get_permissions(real_role),
+            "role_label": ROLE_LABELS.get(real_role, real_role)
+        })
+        
     except Exception as e:
         print(f"❌ 註冊失敗: {e}")
         return jsonify({"ok": False, "status": "error", "message": str(e)}), 400
@@ -427,24 +447,26 @@ def authenticate_complete():
 @app.route("/api/logout", methods=["POST"])
 @login_required
 def logout():
-    """登出系統，全面清空 Session 授權狀態，並重置 guest 帳號"""
-    # 1. 先抓出現在是誰要登出
+    """登出系統，可選擇是否重置 guest 帳號"""
     user = session.get("user", {})
     username = user.get("username")
     
-    # 2. 【關鍵重置機制】如果是 guest，刪除他綁定的生物特徵
-    if username == "guest":
+    # 接收前端傳來的選項 (如果沒傳，預設為 False 不重置)
+    data = request.get_json(silent=True) or {}
+    reset_guest = data.get("reset_guest", False)
+    
+    # 必須是 guest「而且」前端有要求重置，才刪除公鑰
+    if username == "guest" and reset_guest:
         try:
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             c.execute("DELETE FROM credentials WHERE username=?", (username,))
             conn.commit()
             conn.close()
-            print("🔄 公共帳號 guest 已登出，人臉資料已成功重置！")
+            print("🔄 公共帳號 guest 已登出，且人臉資料已成功重置！")
         except Exception as e:
             print(f"guest 重置失敗: {e}")
 
-    # 3. 清空登入狀態，並走到最後的「出口 (return)」
     session.clear()
     return jsonify({"ok": True, "message": "已登出安全網關"})
 

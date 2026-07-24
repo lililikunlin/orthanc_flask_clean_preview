@@ -337,6 +337,7 @@ async function resetUserFido(username) {
     if (res.ok) {
       alert(res.message);
       loadAdminUsers(); // 重新整理表格
+      refreshRegisteredUsers();// 管理員清除別人人臉後，前端聯想名單立刻更新
     } else {
       alert(`清除失敗: ${res.message}`);
     }
@@ -584,17 +585,21 @@ async function doAction(type) {
 
     if (completeRes.ok || completeRes.status === "success") {
         if (isReg) {
-            setAuthMessage(`✅ 帳號 [${usernameInput}] 人臉綁定成功！`);
-            document.getElementById("fidoUsername").value = ""; // 清空輸入框
+            // 註冊專屬動作：加進已知清單、清空輸入框
             registeredUsersList.push(usernameInput);
-        } else {
-            currentUser = completeRes.user;
-            currentPermissions = completeRes.permissions || [];
-            setAuthMessage(`✅ FIDO2 登入成功：${currentUser.username}（${completeRes.role_label}）`);
-            renderRoleInfo();
-            resetDetail();
-            await loadStudies(); 
+            document.getElementById("fidoUsername").value = ""; 
         }
+        
+        // 不論是「剛註冊完」還是「單純登入」，後端都會給 user 資訊，直接更新畫面！
+        currentUser = completeRes.user;
+        currentPermissions = completeRes.permissions || [];
+        
+        const actionName = isReg ? "註冊並自動登入" : "登入";
+        setAuthMessage(`✅ FIDO2 ${actionName}成功：${currentUser.username}（${completeRes.role_label}）`);
+        
+        renderRoleInfo();
+        resetDetail();
+        await loadStudies();
     }
   } catch (error) {
     currentUser = null;
@@ -611,15 +616,15 @@ async function doAction(type) {
 // 用來儲存「已經綁定過人臉」的帳號清單
 let registeredUsersList = [];
 
-// 當網頁載入時，自動去後端撈取已註冊的帳號清單
-document.addEventListener("DOMContentLoaded", async () => {
+async function refreshRegisteredUsers() {
     try {
-        const res = await apiFetch('/api/users/registered', { method: 'GET' });
+        const res = await apiFetch(`/api/users/registered?t=${Date.now()}`, { method: 'GET' });
         if (res.ok && res.users) {
-            registeredUsersList = res.users; // 存入記憶體供按鈕判斷使用
+            registeredUsersList = res.users; // 更新記憶體名單
             
-            // 將名單塞入 HTML 的 datalist 中，製作下拉聯想效果
             const datalist = document.getElementById('registered-users');
+            datalist.innerHTML = ''; // 先清空舊的選項，避免重複疊加
+            
             res.users.forEach(username => {
                 const option = document.createElement('option');
                 option.value = username;
@@ -629,7 +634,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     } catch (err) {
         console.error("無法載入帳號聯想清單:", err);
     }
-});
+}
+
+// 網頁載入時，呼叫一次
+document.addEventListener("DOMContentLoaded", refreshRegisteredUsers);
 
 // 綁定智慧按鈕事件
 document.getElementById("smart-login-btn").addEventListener("click", () => {
@@ -651,9 +659,22 @@ document.getElementById("smart-login-btn").addEventListener("click", () => {
 });
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
-  try {
-    const data = await apiFetch("/api/logout", { method: "POST" });
+  let isReset = false;
 
+  // 1. 如果登出的是 guest 帳號，跳出選擇視窗
+  if (currentUser && currentUser.username === 'guest') {
+    // confirm 會跳出內建的對話框，按「確定」回傳 true，按「取消」回傳 false
+    isReset = confirm("【測試專用】\n您正在登出 guest 帳號。是否要一併「清除人臉紀錄」，以便下一位測試？\n\n👉 按 [確定]：登出並清除人臉\n👉 按 [取消]：僅一般登出 (保留人臉)");
+  }
+
+  try {
+    // 2. 把 isReset 的結果包成 JSON 傳給後端
+    const data = await apiFetch("/api/logout", { 
+        method: "POST",
+        body: JSON.stringify({ reset_guest: isReset })
+    });
+
+    // 3. 執行後續的畫面清空動作 (維持原樣)
     currentUser = null;
     currentPermissions = [];
     setAuthMessage(data.message);
@@ -662,6 +683,9 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 
     studiesTableBody.innerHTML = '<tr><td colspan="6" class="empty-cell">尚未載入資料</td></tr>';
     resetDetail();
+
+    // 登出成功後，立刻重新向後端要一次最新的已註冊名單！
+    await refreshRegisteredUsers();
   } catch (error) {
     setAuthMessage(error.message, true);
   }
