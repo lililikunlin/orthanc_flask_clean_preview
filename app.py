@@ -497,6 +497,11 @@ def me():
 @permission_required("view")
 def get_studies():
     try:
+        # 1. 先抓出現在是誰在看清單 (轉小寫方便比對)
+        user = session.get("user", {})
+        username = user.get("username", "").lower()
+        role = user.get("role", "")
+
         study_ids = orthanc_request("GET", "/studies").json()
         studies = []
 
@@ -504,6 +509,19 @@ def get_studies():
             detail = orthanc_request("GET", f"/studies/{study_id}").json()
             main_tags = dicom_tags(detail, "MainDicomTags")
             patient_tags = dicom_tags(detail, "PatientMainDicomTags")
+            
+            # 2. 【資料隔離核心邏輯】
+            # 抓出 DICOM 裡面的病患 ID 與 姓名
+            dicom_patient_name = patient_tags.get("PatientName", "").lower()
+            dicom_patient_id = patient_tags.get("PatientID", "").lower()
+
+            # 如果登入的是「病患(patient)」，進行嚴格審查
+            if role == "patient":
+                # 如果該病患的帳號 (例如 patient1) 不在 DICOM 的姓名或 ID 裡
+                if username not in dicom_patient_name and username not in dicom_patient_id:
+                    continue  # 🚫 直接跳過這筆資料，不給他看！(不會加進 studies 清單)
+
+            # 計算張數與重組資料
             series_ids = detail.get("Series", []) or []
 
             instances_count = 0
@@ -525,12 +543,56 @@ def get_studies():
                 }
             )
 
+        # 依照日期排序
         studies.sort(key=lambda item: item.get("study_date", ""), reverse=True)
         return jsonify({"ok": True, "data": studies})
 
     except requests.RequestException as exc:
         return jsonify({"ok": False, "message": f"Orthanc 讀取失敗：{exc}"}), 500
 
+@app.route("/api/studies/<study_id>/modify", methods=["POST"])
+@login_required
+def modify_dicom_name(study_id):
+    """修改 DICOM 檔案內的 PatientName (僅限 admin 或 doctor)"""
+    user = session.get("user", {})
+    role = user.get("role", "")
+    
+    # 🚨 1. 權限管控：阻擋病患或未經授權的人員
+    if role not in ["admin", "doctor"]:
+        return jsonify({"ok": False, "message": "安全限制：您沒有權限修改醫療影像紀錄"}), 403
+        
+    data = request.get_json(silent=True) or {}
+    new_name = data.get("new_patient_name")
+    
+    if not new_name:
+        return jsonify({"ok": False, "message": "請提供新的病患名稱"}), 400
+
+    # 2. 準備給 Orthanc 的修改指令
+    payload = {
+        "Replace": {
+            "PatientName": new_name  # 指定要覆寫的 DICOM 標籤
+        },
+        "KeepSource": False  # 重要：告訴 Orthanc 刪除原本的舊檔案，避免重複
+    }
+
+    try:
+        # 3. 呼叫 Orthanc API (請確認你的 URL 變數名稱)
+        orthanc_url = os.getenv('ORTHANC_URL', 'http://127.0.0.1:8042')
+        auth = (os.getenv('ORTHANC_USERNAME', ''), os.getenv('ORTHANC_PASSWORD', ''))
+        
+        resp = requests.post(
+            f"{orthanc_url}/studies/{study_id}/modify",
+            json=payload,
+            auth=auth,
+            verify=False
+        )
+        resp.raise_for_status()
+        
+        return jsonify({"ok": True, "message": f"DICOM 檔案名稱已成功修改為 [{new_name}]"})
+        
+    except Exception as e:
+        print(f"Orthanc 修改失敗: {e}")
+        return jsonify({"ok": False, "message": f"修改失敗，伺服器錯誤: {e}"}), 500
 
 @app.route("/api/studies/<study_id>", methods=["GET"])
 @login_required

@@ -347,12 +347,58 @@ async function resetUserFido(username) {
 }
 
 async function loadStudies() {
-  try {
-    const data = await apiFetch("/api/studies", { method: "GET" });
-    renderStudies(data.data || []);
-  } catch (error) {
-    studiesTableBody.innerHTML = `<tr><td colspan="6" class="empty-cell err">${escapeHtml(error.message)}</td></tr>`;
-  }
+    // 1. 抓取表格的 tbody 元素
+    const tbody = document.getElementById("studiesTableBody");
+    if (!tbody) return;
+    
+    // 2. 顯示載入中的提示
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">載入中...</td></tr>';
+    
+    try {
+        // 3. 向後端請求 DICOM 清單
+        const res = await apiFetch("/api/studies", { method: "GET" });
+        
+        if (res.ok && res.data) {
+            tbody.innerHTML = ""; // 清空表格
+            
+            if (res.data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">目前沒有任何影像資料</td></tr>';
+                return;
+            }
+            
+            // 4. 迴圈處理每一筆 DICOM 檔案
+            res.data.forEach(study => {
+                const tr = document.createElement("tr");
+                
+                // 只有 admin 和 doctor 看得到「改名按鈕」
+                let renameBtn = "";
+                if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'doctor')) {
+                    renameBtn = `<button class="secondary-btn inline-btn" onclick="renameDicomStudy('${study.id}', '${escapeHtml(study.patient_name)}')" style="margin-left: 8px; font-size: 0.8rem;">✏️ 改名</button>`;
+                }
+                
+                // 5. 組合該列的 HTML
+                tr.innerHTML = `
+                    <td>
+                        <strong>${escapeHtml(study.patient_name || "無名稱")}</strong> 
+                        ${renameBtn}
+                    </td>
+                    <td>${escapeHtml(study.patient_id || "未知")}</td>
+                    <td>${escapeHtml(study.study_date)}</td>
+                    <td>${escapeHtml(study.study_description || "-")}</td>
+                    <td>${study.instances_count}</td>
+                    <td>
+                        <button class="primary-btn inline-btn" onclick="loadStudyDetail('${study.id}')">查看影像</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+            
+        } else {
+            tbody.innerHTML = `<tr><td colspan="6" class="empty-cell">載入失敗：${res.message}</td></tr>`;
+        }
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" class="empty-cell">系統錯誤：${err.message}</td></tr>`;
+    }
 }
 
 async function loadStudyDetail(studyId) {
@@ -748,6 +794,35 @@ if (adminUserForm) {
       alert(`系統錯誤: ${err.message}`);
     }
   });
+}
+
+// 修改 DICOM 檔案名稱
+async function renameDicomStudy(studyId, oldName) {
+    // 1. 跳出內建的輸入框讓使用者填寫新名字
+    const newName = prompt(`請輸入新的病患名稱\n(原名稱: ${oldName}):`, oldName);
+    
+    // 如果按取消，或是沒有改變，就直接結束
+    if (!newName || newName.trim() === "" || newName === oldName) {
+        return; 
+    }
+    
+    try {
+        // 2. 呼叫我們剛寫好的 Flask 修改 API
+        const res = await apiFetch(`/api/studies/${studyId}/modify`, {
+            method: "POST",
+            body: JSON.stringify({ new_patient_name: newName.trim() })
+        });
+        
+        if (res.ok) {
+            alert(res.message);
+            // 3. 修改成功後，重新載入畫面上的 DICOM 清單
+            await loadStudies();
+        } else {
+            alert(`修改失敗: ${res.message}`);
+        }
+    } catch (err) {
+        alert(`系統錯誤: ${err.message}`);
+    }
 }
 
 checkHealth();
