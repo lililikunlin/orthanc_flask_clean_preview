@@ -468,7 +468,7 @@ def logout():
             print(f"guest 重置失敗: {e}")
 
     session.clear()
-    return jsonify({"ok": True, "message": "已登出安全網關"})
+    return jsonify({"ok": True, "message": "已登出"})
 
 
 @app.route("/api/me", methods=["GET"])
@@ -523,11 +523,18 @@ def get_studies():
 
             # 計算張數與重組資料
             series_ids = detail.get("Series", []) or []
-
             instances_count = 0
+            cover_instance_id = None # 用來存封面圖片的 ID
+
             for series_id in series_ids:
                 series_detail = orthanc_request("GET", f"/series/{series_id}").json()
-                instances_count += len(series_detail.get("Instances", []) or [])
+                # 1. 先明確定義 instances 變數，把該 series 裡面的圖片陣列抓出來
+                instances = series_detail.get("Instances", []) or []
+                # 2. 透過剛剛定義的 instances 來計算數量並累加
+                instances_count += len(instances)
+                # 3. 如果這個 series 有圖片，且我們還沒拿到封面，就拿第一張當封面
+                if instances and not cover_instance_id:
+                    cover_instance_id = instances[0]
 
             studies.append(
                 {
@@ -540,6 +547,7 @@ def get_studies():
                     "patient_id": patient_tags.get("PatientID", ""),
                     "instances_count": instances_count,
                     "series_count": len(series_ids),
+                    "cover_instance_id": cover_instance_id # 把封面 ID 傳給前端
                 }
             )
 

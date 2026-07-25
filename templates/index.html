@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Orthanc Flask 系統</title>
+  <title>遠距醫療影像存取安全系統</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 
@@ -12,7 +12,7 @@
   <div class="page">
     <header class="hero">
       <div>
-        <h1>Orthanc × Flask 後端串接系統</h1>
+        <h1>遠距醫療影像存取安全系統</h1>
       </div>
 
       <div class="health-card">
@@ -28,10 +28,9 @@
       </div>
     </header>
 
-    <main class="layout"
-      style="display: flex; gap: 20px; align-items: flex-start; max-width: 1400px; margin: 0 auto; width: 100%;">
+    <main class="layout">
 
-      <div class="sidebar" style="flex: 0 0 350px; display: flex; flex-direction: column; gap: 20px;">
+      <div class="sidebar">
 
         <section class="card login-card">
           <h2>🏥 醫師身分管理</h2>
@@ -82,7 +81,7 @@
         </section>
 
       </div>
-      <div class="main-content" style="flex: 1; display: flex; flex-direction: column; gap: 20px; min-width: 0;">
+      <div class="main-content">
 
         <section class="card admin-card" id="adminSection" hidden>
           <div class="section-header">
@@ -140,6 +139,7 @@
             <table>
               <thead>
                 <tr>
+                  <th>縮圖</th>
                   <th>Study ID</th>
                   <th>Patient</th>
                   <th>Date</th>

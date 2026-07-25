@@ -258,6 +258,11 @@ async function refreshMe() {
   }
 
   renderRoleInfo();
+
+  // 如果確認是登入狀態，就自動幫忙把清單載入回來
+  if (currentUser) {
+      await loadStudies();
+  }
 }
 
 // ==========================================
@@ -375,19 +380,31 @@ async function loadStudies() {
                 if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'doctor')) {
                     renameBtn = `<button class="secondary-btn inline-btn" onclick="renameDicomStudy('${study.id}', '${escapeHtml(study.patient_name)}')" style="margin-left: 8px; font-size: 0.8rem;">✏️ 改名</button>`;
                 }
+
+                // 準備縮圖的 HTML
+                // 呼叫我們後端既有的 preview API，如果載入失敗，就顯示灰底文字
+                let thumbnailHtml = '<div class="thumb-placeholder muted">無影像</div>';
+                if (study.cover_instance_id) {
+                    const previewUrl = `/api/instances/${study.cover_instance_id}/preview`;
+                    thumbnailHtml = `<img src="${previewUrl}" class="study-thumbnail" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+                                     <div class="thumb-placeholder muted" style="display:none;">無法預覽</div>`;
+                }
                 
-                // 5. 組合該列的 HTML
+                // 組合該列的 HTML (配合 HTML 新增的縮圖欄位)
                 tr.innerHTML = `
+                    <td style="width: 80px; text-align: center;">
+                        ${thumbnailHtml}
+                    </td>
                     <td>
                         <strong>${escapeHtml(study.patient_name || "無名稱")}</strong> 
-                        ${renameBtn}
+                        ${renameBtn} <br>
+                        <span class="muted" style="font-size: 0.85rem;">${escapeHtml(study.patient_id || "未知")}</span>
                     </td>
-                    <td>${escapeHtml(study.patient_id || "未知")}</td>
                     <td>${escapeHtml(study.study_date)}</td>
                     <td>${escapeHtml(study.study_description || "-")}</td>
                     <td>${study.instances_count}</td>
                     <td>
-                        <button class="primary-btn inline-btn" onclick="loadStudyDetail('${study.id}')">查看影像</button>
+                        <button class="primary-btn inline-btn" style="white-space: nowrap;" onclick="loadStudyDetail('${study.id}')">查看影像</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
