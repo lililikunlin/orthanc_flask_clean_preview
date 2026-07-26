@@ -118,27 +118,37 @@ function renderRoleInfo() {
   const infoEl = document.getElementById("roleInfo");
   const badgesEl = document.getElementById("permissionBadges");
   const adminSection = document.getElementById("adminSection"); // 抓取管理面板
+  const adminLogsSection = document.getElementById("adminLogsSection"); // 抓取日誌區塊
+
+  // 1. 處理「尚未登入」的狀態
   if (!currentUser) {
     roleInfo.innerHTML = '<span class="muted">尚未登入</span>';
     permissionBadges.innerHTML = '<span class="permission-chip chip-muted">請先登入</span>';
     uploadSection.hidden = true;
     adminSection.hidden = true;
+    if (adminLogsSection) adminLogsSection.hidden = true; // 未登入時隱藏日誌
     return;
   }
 
+  // 2. 處理「已登入」的使用者資訊與權限標籤
   roleInfo.innerHTML = `<strong>${escapeHtml(currentUser.username)}</strong> / ${escapeHtml(currentUser.role)}`;
   permissionBadges.innerHTML = currentPermissions
     .map((permission) => `<span class="permission-chip">${escapeHtml(permission)}</span>`)
     .join("");
 
+  // 3. 處理「上傳權限」面板顯示與否
   uploadSection.hidden = !hasPermission("upload");
 
-  //檢查是否為管理員，是的話就秀出後台，並載入使用者清單
+  // 4. 處理「管理員專屬面板 (帳號管理 + 系統日誌)」顯示與否
   if (currentUser.role === 'admin' || currentPermissions.includes('manage_users')) {
       adminSection.hidden = false;
+      if (adminLogsSection) adminLogsSection.hidden = false; // 顯示日誌
+      
       loadAdminUsers(); // 呼叫載入清單 API
+      loadSystemLogs(); // 呼叫載入日誌 API
   } else {
       adminSection.hidden = true;
+      if (adminLogsSection) adminLogsSection.hidden = true; // 隱藏日誌
   }
 }
 
@@ -841,6 +851,42 @@ async function renameDicomStudy(studyId, oldName) {
         alert(`系統錯誤: ${err.message}`);
     }
 }
+
+// ==========================================
+// 📜 系統日誌 (Admin Only)
+// ==========================================
+async function loadSystemLogs() {
+    const tbody = document.getElementById("logsTableBody");
+    if (!tbody) return;
+    
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">載入中...</td></tr>';
+    
+    try {
+        const res = await apiFetch("/api/admin/logs", { method: "GET" });
+        if (res.ok) {
+            if (res.logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">目前尚無任何紀錄</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = res.logs.map(log => `
+                <tr>
+                    <td style="white-space: nowrap; font-size: 0.85rem;" class="muted">${escapeHtml(log.timestamp)}</td>
+                    <td><strong>${escapeHtml(log.username)}</strong></td>
+                    <td><span class="permission-chip chip-muted">${escapeHtml(log.action)}</span></td>
+                    <td style="word-break: break-word;">${escapeHtml(log.details)}</td>
+                    <td style="font-size: 0.85rem;" class="muted">${escapeHtml(log.ip_address)}</td>
+                </tr>
+            `).join("");
+        }
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-cell err">載入失敗：${err.message}</td></tr>`;
+    }
+}
+
+// 綁定重新整理按鈕
+const refreshLogsBtn = document.getElementById("refreshLogsBtn");
+if(refreshLogsBtn) refreshLogsBtn.addEventListener("click", loadSystemLogs);
 
 checkHealth();
 refreshMe();

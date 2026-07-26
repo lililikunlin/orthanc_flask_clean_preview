@@ -62,28 +62,28 @@ def init_db():
     c = conn.cursor()
     
     # 表格 1：credentials (負責 Authentication 身分驗證)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS credentials (
-            username TEXT PRIMARY KEY,
-            credential_data TEXT NOT NULL
-        )
-    ''')
+    c.execute('''CREATE TABLE IF NOT EXISTS credentials (username TEXT PRIMARY KEY, credential_data TEXT NOT NULL)''')
     
     # 表格 2：users (負責 Authorization 角色權限)
+    c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, role TEXT NOT NULL)''')
+    
+    # 表格 3：system_logs (系統稽核日誌)
     c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            role TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS system_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT (datetime('now', 'localtime')),
+            username TEXT,
+            action TEXT,
+            details TEXT,
+            ip_address TEXT
         )
     ''')
     
-    # 【自動植入】如果 users 表是空的，就自動建立預設的三個角色
+    # 自動植入預設的三個角色
     c.execute("SELECT count(*) FROM users")
     if c.fetchone()[0] == 0:
         c.executemany("INSERT INTO users (username, role) VALUES (?, ?)", [
-            ("patient1", "patient"),
-            ("doctor1", "doctor"),
-            ("admin1", "admin")
+            ("patient1", "patient"), ("doctor1", "doctor"), ("admin1", "admin")
         ])
         
     conn.commit()
@@ -91,6 +91,25 @@ def init_db():
 
 # 啟動時立刻初始化資料庫
 init_db()
+
+# 共用的寫入日誌函數
+def write_log(action, details):
+    """將系統操作寫入 SQLite 日誌資料庫"""
+    user = session.get("user", {})
+    username = user.get("username", "System") # 如果沒登入，預設為 System
+    ip_address = request.remote_addr or "unknown"
+    
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO system_logs (username, action, details, ip_address) 
+            VALUES (?, ?, ?, ?)
+        ''', (username, action, details, ip_address))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"寫入日誌失敗: {e}")
 
 ROLE_PERMISSIONS = {
     "patient": ["view", "modify", "delete"],
@@ -332,6 +351,7 @@ def register_complete():
         session["user"] = {"username": username, "role": real_role}
         
         print(f"✅ FIDO2 註冊成功並自動登入：{username} (權限: {real_role})")
+        write_log("REGISTER", f"FIDO2 註冊並自動登入成功 (指派角色: {real_role})")
         
         # 【修改回傳格式】比照 authenticate_complete，把 user 資料傳給前端
         return jsonify({
@@ -426,6 +446,7 @@ def authenticate_complete():
         session["user"] = {"username": username, "role": real_role}
         
         print(f"🔓 FIDO2 驗證成功：已登入 {username} (權限: {real_role})")
+        write_log("LOGIN", f"FIDO2 登入成功 (權限: {real_role})")
         
         return jsonify({
             "ok": True,
@@ -468,6 +489,7 @@ def logout():
             print(f"guest 重置失敗: {e}")
 
     session.clear()
+    write_log("LOGOUT", f"登出系統" + (" (並重置了 guest 人臉)" if username == "guest" and reset_guest else ""))
     return jsonify({"ok": True, "message": "已登出"})
 
 
@@ -595,7 +617,7 @@ def modify_dicom_name(study_id):
             verify=False
         )
         resp.raise_for_status()
-        
+        write_log("RENAME_STUDY", f"將病歷 (Study ID: {study_id}) 的病患名稱修改為 [{new_name}]")
         return jsonify({"ok": True, "message": f"DICOM 檔案名稱已成功修改為 [{new_name}]"})
         
     except Exception as e:
@@ -647,7 +669,7 @@ def get_study_detail(study_id):
             "study_instance_uid": main_tags.get("StudyInstanceUID", ""),
             "instances_count": len(instances),
         }
-
+        write_log("VIEW_STUDY", f"查閱了病患 [{study_info.get('patient_name')}] 的影像紀錄 (Study ID: {study_id})")
         return jsonify({"ok": True, "study": study_info, "instances": instances})
 
     except requests.RequestException as exc:
@@ -703,6 +725,7 @@ def get_instance_preview(instance_id):
 def download_instance(instance_id):
     try:
         resp = orthanc_request("GET", f"/instances/{instance_id}/file", timeout=60)
+        write_log("DOWNLOAD_DICOM", f"下載了 DICOM 原始檔案 (Instance ID: {instance_id})")
         return send_file(
             BytesIO(resp.content),
             mimetype="application/dicom",
@@ -768,7 +791,7 @@ def upsert_user():
         c.execute("REPLACE INTO users (username, role) VALUES (?, ?)", (target_username, target_role))
         conn.commit()
         conn.close()
-        
+        write_log("ADMIN_UPSERT_USER", f"設定帳號 [{target_username}] 為 [{target_role}] 角色")
         return jsonify({"ok": True, "message": f"成功設定帳號 [{target_username}] 為 [{target_role}] 角色！"})
     except Exception as e:
         return jsonify({"ok": False, "message": f"設定失敗：{str(e)}"}), 500
@@ -794,7 +817,7 @@ def delete_user(target_username):
         
         conn.commit()
         conn.close()
-        
+        write_log("ADMIN_DELETE_USER", f"徹底刪除帳號 [{target_username}] 與其人臉綁定紀錄")
         return jsonify({"ok": True, "message": f"已徹底刪除帳號 [{target_username}] 與其人臉綁定紀錄"})
     except Exception as e:
         return jsonify({"ok": False, "message": f"刪除失敗：{str(e)}"}), 500
@@ -816,10 +839,36 @@ def reset_user_fido(target_username):
         c.execute("DELETE FROM credentials WHERE username=?", (target_username,))
         conn.commit()
         conn.close()
-        
+        write_log("ADMIN_RESET_FIDO", f"清除了 [{target_username}] 的人臉綁定紀錄")
         return jsonify({"ok": True, "message": f"已成功清除 [{target_username}] 的人臉綁定紀錄，該帳號下次登入將重新啟動註冊流程。"})
     except Exception as e:
         return jsonify({"ok": False, "message": f"清除失敗：{str(e)}"}), 500
+
+@app.route("/api/admin/logs", methods=["GET"])
+@login_required
+@permission_required("manage_users")
+def get_system_logs():
+    """取得系統稽核日誌 (僅限管理員)"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        # 抓取最新的 100 筆紀錄
+        c.execute("SELECT timestamp, username, action, details, ip_address FROM system_logs ORDER BY id DESC LIMIT 100")
+        rows = c.fetchall()
+        conn.close()
+        
+        logs = []
+        for row in rows:
+            logs.append({
+                "timestamp": row[0],
+                "username": row[1],
+                "action": row[2],
+                "details": row[3],
+                "ip_address": row[4]
+            })
+        return jsonify({"ok": True, "logs": logs})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
 
 # -------------------------
 # Role-based write APIs
@@ -843,7 +892,7 @@ def upload_instance():
             headers={"Content-Type": "application/dicom"},
             timeout=60,
         ).json()
-
+        write_log("UPLOAD_DICOM", f"上傳了新的 DICOM 檔案 (Orthanc ID: {uploaded.get('ID')})")
         return jsonify({"ok": True, "message": "DICOM 加入成功", "orthanc": uploaded})
 
     except requests.RequestException as exc:
@@ -894,7 +943,8 @@ def modify_instance(instance_id):
         if data.get("replace_original", True):
             orthanc_request("DELETE", f"/instances/{instance_id}", timeout=60)
             deleted_original = True
-
+            
+        write_log("MODIFY_INSTANCE", f"修改了 DICOM 內部標籤 (Instance ID: {instance_id})")
         return jsonify(
             {
                 "ok": True,
@@ -914,6 +964,7 @@ def modify_instance(instance_id):
 def delete_instance(instance_id):
     try:
         orthanc_request("DELETE", f"/instances/{instance_id}", timeout=60)
+        write_log("DELETE_DICOM", f"刪除了 DICOM 檔案 (Instance ID: {instance_id})")
         return jsonify({"ok": True, "message": "DICOM 已移除"})
     except requests.RequestException as exc:
         return jsonify({"ok": False, "message": f"DICOM 移除失敗：{exc}"}), 500
