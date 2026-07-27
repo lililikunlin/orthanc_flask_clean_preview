@@ -45,7 +45,9 @@ ORTHANC_VERIFY_SSL = os.getenv("ORTHANC_VERIFY_SSL", "true").lower() == "true"
 # --- FIDO2 的初始化與狀態 ---
 states = {}  # 存 FIDO2 挑戰狀態 (臨時考卷，放記憶體即可)
 
-rp = PublicKeyCredentialRpEntity(id="localhost", name="遠距醫療安全網關")
+# 從環境變數讀取網域，如果沒設定，就預設使用 'localhost' (本機用)
+RP_ID = os.getenv("FIDO_RP_ID", "localhost")
+rp = PublicKeyCredentialRpEntity(id=RP_ID, name="遠距醫療安全網關")
 server = Fido2Server(rp)
 
 def to_websafe(data):
@@ -985,5 +987,17 @@ def delete_instance(instance_id):
 
 
 if __name__ == "__main__":
-    is_debug_mode = os.getenv("FLASK_DEBUG", "true").lower() in ["true", "1"]
-    app.run(debug=is_debug_mode, host="0.0.0.0", port=5000)
+    # 自動判斷要綁定在哪個 IP (雲端用 0.0.0.0，本機用 127.0.0.1)
+    server_host = os.getenv("FLASK_HOST", "127.0.0.1")
+    
+    # 從環境變數讀取憑證路徑
+    cert_path = os.getenv("SSL_CERT_PATH", "")
+    key_path = os.getenv("SSL_KEY_PATH", "")
+
+    # 自動偵測：如果環境變數有給憑證路徑，而且檔案真的存在，才啟動 HTTPS
+    if cert_path and key_path and os.path.exists(cert_path) and os.path.exists(key_path):
+        print(f"🚀 啟動正式環境 (HTTPS) | Host: {server_host} | Domain: {RP_ID}")
+        app.run(host=server_host, port=5000, ssl_context=(cert_path, key_path), debug=IS_DEVELOPMENT)
+    else:
+        print(f"🔧 啟動開發環境 (HTTP) | Host: {server_host} | Domain: {RP_ID}")
+        app.run(host=server_host, port=5000, debug=IS_DEVELOPMENT)
