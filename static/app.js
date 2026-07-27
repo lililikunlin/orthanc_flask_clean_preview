@@ -884,6 +884,41 @@ async function loadSystemLogs() {
     }
 }
 
+// ==========================================
+// 🔍 Study 清單即時搜尋功能
+// ==========================================
+const studySearchInput = document.getElementById("studySearchInput");
+
+if (studySearchInput) {
+    // 當使用者在搜尋框打字的瞬間 (input 事件) 就會觸發
+    studySearchInput.addEventListener("input", function(e) {
+        // 1. 取得使用者輸入的關鍵字，並全部轉成小寫 (避免大小寫差異找不到)
+        const searchTerm = e.target.value.toLowerCase().trim();
+        
+        // 2. 抓取 Study 清單表格裡面的所有資料列 (tr)
+        const studyTableBody = document.querySelector("#studiesTableBody");
+        if (!studyTableBody) return;
+        
+        const rows = studyTableBody.querySelectorAll("tr");
+
+        // 3. 逐列檢查
+        rows.forEach(row => {
+            // 如果是空資料的提示文字 ("尚未載入資料"等)，就跳過不處理
+            if (row.classList.contains("empty-cell") || row.querySelector("td[colspan]")) return;
+
+            // 將整列的文字內容 (包含病患名稱、ID、日期等) 抓出來轉小寫
+            const rowText = row.textContent.toLowerCase();
+
+            // 4. 比對！如果這列的文字包含關鍵字，就顯示；否則就隱藏
+            if (rowText.includes(searchTerm)) {
+                row.style.display = ""; // 恢復顯示
+            } else {
+                row.style.display = "none"; // 隱藏
+            }
+        });
+    });
+}
+
 // 綁定重新整理按鈕
 const refreshLogsBtn = document.getElementById("refreshLogsBtn");
 if(refreshLogsBtn) refreshLogsBtn.addEventListener("click", loadSystemLogs);

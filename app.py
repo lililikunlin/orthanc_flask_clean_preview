@@ -583,11 +583,10 @@ def get_studies():
 @app.route("/api/studies/<study_id>/modify", methods=["POST"])
 @login_required
 def modify_dicom_name(study_id):
-    """修改 DICOM 檔案內的 PatientName (僅限 admin 或 doctor)"""
+    """修改 DICOM 檔案名稱並賦予新身分"""
     user = session.get("user", {})
     role = user.get("role", "")
     
-    # 🚨 1. 權限管控：阻擋病患或未經授權的人員
     if role not in ["admin", "doctor"]:
         return jsonify({"ok": False, "message": "安全限制：您沒有權限修改醫療影像紀錄"}), 403
         
@@ -597,32 +596,47 @@ def modify_dicom_name(study_id):
     if not new_name:
         return jsonify({"ok": False, "message": "請提供新的病患名稱"}), 400
 
-    # 2. 準備給 Orthanc 的修改指令
+    # 1. 產生一個全新的虛擬 Patient ID (用 study_id 的前 6 碼來保證不重複)
+    new_patient_id = f"TEST-{study_id[:6]}"
+
+    # 2. 準備修改指令：這次我們「同時」替換名字與 ID
     payload = {
         "Replace": {
-            "PatientName": new_name  # 指定要覆寫的 DICOM 標籤
+            "PatientName": new_name,
+            "PatientID": new_patient_id,  # 賦予全新的身分證字號
+            "SpecificCharacterSet": "ISO_IR 192" 
         },
-        "KeepSource": False  # 重要：告訴 Orthanc 刪除原本的舊檔案，避免重複
+        "Force": True,       
+        "KeepSource": False  
     }
 
     try:
-        # 3. 呼叫 Orthanc API (請確認你的 URL 變數名稱)
         orthanc_url = os.getenv('ORTHANC_URL', 'http://127.0.0.1:8042')
         auth = (os.getenv('ORTHANC_USERNAME', ''), os.getenv('ORTHANC_PASSWORD', ''))
         
+        # 3. 改回對 "studies" 發出請求
+        # 因為我們連 PatientID 都改了，Orthanc 這次會非常樂意幫我們把它獨立成一個新病患
         resp = requests.post(
             f"{orthanc_url}/studies/{study_id}/modify",
             json=payload,
             auth=auth,
             verify=False
         )
-        resp.raise_for_status()
-        write_log("RENAME_STUDY", f"將病歷 (Study ID: {study_id}) 的病患名稱修改為 [{new_name}]")
-        return jsonify({"ok": True, "message": f"DICOM 檔案名稱已成功修改為 [{new_name}]"})
+        
+        if not resp.ok:
+            error_detail = resp.text
+            try:
+                error_detail = resp.json()
+            except:
+                pass
+            return jsonify({"ok": False, "message": f"Orthanc 拒絕修改: {error_detail}"}), 400
+            
+        # 4. 成功的話，寫入日誌並回傳
+        write_log("RENAME_STUDY_AND_SPLIT", f"將病歷 (Study ID: {study_id}) 獨立為新病患 [{new_name}] (新ID: {new_patient_id})")
+        return jsonify({"ok": True, "message": f"已成功將病歷獨立為新病患 [{new_name}]！"})
         
     except Exception as e:
-        print(f"Orthanc 修改失敗: {e}")
-        return jsonify({"ok": False, "message": f"修改失敗，伺服器錯誤: {e}"}), 500
+        return jsonify({"ok": False, "message": f"網路或系統嚴重錯誤: {e}"}), 500
 
 @app.route("/api/studies/<study_id>", methods=["GET"])
 @login_required

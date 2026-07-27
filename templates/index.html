@@ -159,9 +159,18 @@
         </section>
 
         <section class="card studies-card">
-          <div class="section-header">
-            <h2>Study 清單</h2>
-            <button id="loadStudiesBtn" class="primary-btn">載入 Studies</button>
+          <div class="section-header" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center;">
+            <h2 style="margin: 0;">📁 Study 清單</h2>
+            
+            <!-- 搜尋框 -->
+            <input 
+              type="text" 
+              id="studySearchInput" 
+              placeholder="🔍 搜尋病患名稱、ID、描述或日期..." 
+              style="flex: 1; min-width: 250px; padding: 10px 15px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem;"
+            >
+            
+            <button id="loadStudiesBtn" class="primary-btn inline-btn">🔄 載入 Studies</button>
           </div>
 
           <div class="table-wrap">
@@ -169,11 +178,10 @@
               <thead>
                 <tr>
                   <th>縮圖</th>
-                  <th>Study ID</th>
-                  <th>Patient</th>
-                  <th>Date</th>
-                  <th>Description</th>
-                  <th>Instances</th>
+                  <th>Patient (病患)</th>
+                  <th>Date (日期)</th>
+                  <th>Description (描述)</th>
+                  <th>Instances (張數)</th>
                   <th>操作</th>
                 </tr>
               </thead>
