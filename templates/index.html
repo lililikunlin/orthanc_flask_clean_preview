@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Orthanc Flask 系統</title>
+  <title>遠距醫療影像存取安全系統</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 
@@ -12,7 +12,7 @@
   <div class="page">
     <header class="hero">
       <div>
-        <h1>Orthanc × Flask 後端串接系統</h1>
+        <h1>遠距醫療影像存取安全系統</h1>
       </div>
 
       <div class="health-card">
@@ -28,10 +28,10 @@
       </div>
     </header>
 
-    <main class="layout" style="display: flex; gap: 20px; align-items: flex-start; max-width: 1400px; margin: 0 auto; width: 100%;">
-      
-      <div class="sidebar" style="flex: 0 0 350px; display: flex; flex-direction: column; gap: 20px;">
-        
+    <main class="layout">
+
+      <div class="sidebar">
+
         <section class="card login-card">
           <h2>🏥 醫師身分管理</h2>
           <p class="muted" style="font-size: 0.85rem; margin-bottom: 20px;">使用 FIDO2 生物辨識技術確保醫療數據安全</p>
@@ -39,13 +39,18 @@
           <div class="form-grid">
             <label>
               操作帳號
-              <input id="fidoUsername" type="text" placeholder="請輸入帳號 (例: doctor1)" required />
+              <!-- 新增 list 與 autocomplete 屬性來支援下拉聯想 -->
+              <input id="fidoUsername" type="text" list="registered-users" autocomplete="off"
+                placeholder="請輸入帳號 (例: doctor1)" required />
             </label>
+            <!-- 這是用來放置已註冊名單的隱藏標籤 -->
+            <datalist id="registered-users"></datalist>
 
-            <button type="button" id="btnFidoReg" class="primary-btn" style="background: #3498db; color: white;">
-              步驟1：綁定醫師人臉</button>
-            <button type="button" id="btnFidoAuth" class="primary-btn" style="background: #16a34a; color: white;">
-              步驟2：驗證登入身分</button>
+            <!-- 將原本的兩個按鈕合併為一個智慧按鈕 -->
+            <button type="button" id="smart-login-btn" class="primary-btn" style="background: #3498db; color: white;">
+              下一步 / 登入
+            </button>
+
             <button type="button" id="logoutBtn" class="secondary-btn" style="margin-top: 5px;">登出系統</button>
           </div>
 
@@ -76,16 +81,17 @@
         </section>
 
       </div>
-      <div class="main-content" style="flex: 1; display: flex; flex-direction: column; gap: 20px; min-width: 0;">
-        
+      <div class="main-content">
+
         <section class="card admin-card" id="adminSection" hidden>
           <div class="section-header">
             <h2>👑 系統帳號管理 (Admin Only)</h2>
           </div>
-          
+
           <p class="muted" style="font-size: 0.85rem; margin-bottom: 15px;">新增使用者、設定系統角色，或刪除離職員工的 FIDO2 綁定紀錄。</p>
 
-          <form id="adminUserForm" class="form-grid" style="margin-bottom: 20px; padding: 15px; background: rgba(0,0,0,0.03); border-radius: 8px;">
+          <form id="adminUserForm" class="form-grid"
+            style="margin-bottom: 20px; padding: 15px; background: rgba(0,0,0,0.03); border-radius: 8px;">
             <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
               <label style="flex: 1; min-width: 200px;">
                 帳號名稱
@@ -93,7 +99,8 @@
               </label>
               <label style="flex: 1; min-width: 150px;">
                 指派角色
-                <select id="newUserRole" required style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+                <select id="newUserRole" required
+                  style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
                   <option value="doctor">醫師 (doctor)</option>
                   <option value="patient">病患 (patient)</option>
                   <option value="admin">管理員 (admin)</option>
@@ -122,21 +129,59 @@
           </div>
         </section>
 
-        <section class="card studies-card">
+        <!-- 系統日誌區塊 (僅限管理員) -->
+        <section class="card admin-logs-card" id="adminLogsSection" hidden>
           <div class="section-header">
-            <h2>Study 清單</h2>
-            <button id="loadStudiesBtn" class="primary-btn">載入 Studies</button>
+            <h2>📜 系統稽核日誌 (Audit Trail)</h2>
+            <button id="refreshLogsBtn" class="secondary-btn inline-btn">🔄 重新整理</button>
+          </div>
+
+          <p class="muted" style="font-size: 0.85rem; margin-bottom: 15px;">紀錄系統內關鍵的查閱、修改與登入登出等資安行為。</p>
+
+          <div class="table-wrap log-table-wrap" style="max-height: 350px; overflow-y: auto;">
+            <table>
+              <thead style="position: sticky; top: 0; background: var(--card); box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                <tr>
+                  <th>時間</th>
+                  <th>操作者</th>
+                  <th>動作</th>
+                  <th>詳細內容</th>
+                  <th>來源 IP</th>
+                </tr>
+              </thead>
+              <tbody id="logsTableBody">
+                <tr>
+                  <td colspan="5" class="empty-cell">載入中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card studies-card">
+          <div class="section-header" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center;">
+            <h2 style="margin: 0;">📁 Study 清單</h2>
+            
+            <!-- 搜尋框 -->
+            <input 
+              type="text" 
+              id="studySearchInput" 
+              placeholder="🔍 搜尋病患名稱、ID、描述或日期..." 
+              style="flex: 1; min-width: 250px; padding: 10px 15px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem;"
+            >
+            
+            <button id="loadStudiesBtn" class="primary-btn inline-btn">🔄 載入 Studies</button>
           </div>
 
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Study ID</th>
-                  <th>Patient</th>
-                  <th>Date</th>
-                  <th>Description</th>
-                  <th>Instances</th>
+                  <th>縮圖</th>
+                  <th>Patient (病患)</th>
+                  <th>Date (日期)</th>
+                  <th>Description (描述)</th>
+                  <th>Instances (張數)</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -181,7 +226,7 @@
         </section>
 
       </div>
-      </main>
+    </main>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

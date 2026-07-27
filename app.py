@@ -45,7 +45,9 @@ ORTHANC_VERIFY_SSL = os.getenv("ORTHANC_VERIFY_SSL", "true").lower() == "true"
 # --- FIDO2 的初始化與狀態 ---
 states = {}  # 存 FIDO2 挑戰狀態 (臨時考卷，放記憶體即可)
 
-rp = PublicKeyCredentialRpEntity(id="telemed-sec.duckdns.org", name="遠距醫療安全網關")
+# 從環境變數讀取網域，如果沒設定，就預設使用 'localhost' (本機用)
+RP_ID = os.getenv("FIDO_RP_ID", "localhost")
+rp = PublicKeyCredentialRpEntity(id=RP_ID, name="遠距醫療安全網關")
 server = Fido2Server(rp)
 
 def to_websafe(data):
@@ -62,28 +64,28 @@ def init_db():
     c = conn.cursor()
     
     # 表格 1：credentials (負責 Authentication 身分驗證)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS credentials (
-            username TEXT PRIMARY KEY,
-            credential_data TEXT NOT NULL
-        )
-    ''')
+    c.execute('''CREATE TABLE IF NOT EXISTS credentials (username TEXT PRIMARY KEY, credential_data TEXT NOT NULL)''')
     
     # 表格 2：users (負責 Authorization 角色權限)
+    c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, role TEXT NOT NULL)''')
+    
+    # 表格 3：system_logs (系統稽核日誌)
     c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            role TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS system_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT (datetime('now', 'localtime')),
+            username TEXT,
+            action TEXT,
+            details TEXT,
+            ip_address TEXT
         )
     ''')
     
-    # 【自動植入】如果 users 表是空的，就自動建立預設的三個角色
+    # 自動植入預設的三個角色
     c.execute("SELECT count(*) FROM users")
     if c.fetchone()[0] == 0:
         c.executemany("INSERT INTO users (username, role) VALUES (?, ?)", [
-            ("patient1", "patient"),
-            ("doctor1", "doctor"),
-            ("admin1", "admin")
+            ("patient1", "patient"), ("doctor1", "doctor"), ("admin1", "admin")
         ])
         
     conn.commit()
@@ -91,6 +93,25 @@ def init_db():
 
 # 啟動時立刻初始化資料庫
 init_db()
+
+# 共用的寫入日誌函數
+def write_log(action, details):
+    """將系統操作寫入 SQLite 日誌資料庫"""
+    user = session.get("user", {})
+    username = user.get("username", "System") # 如果沒登入，預設為 System
+    ip_address = request.remote_addr or "unknown"
+    
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO system_logs (username, action, details, ip_address) 
+            VALUES (?, ?, ?, ?)
+        ''', (username, action, details, ip_address))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"寫入日誌失敗: {e}")
 
 ROLE_PERMISSIONS = {
     "patient": ["view", "modify", "delete"],
@@ -236,6 +257,22 @@ def health_check():
 
     return jsonify({"ok": True, "status": status, "orthanc_error": orthanc_error})
 
+@app.route("/api/users/registered", methods=["GET"])
+def get_registered_users():
+    """取得『已經綁定生物特徵』的帳號清單，供前端自動聯想與智慧按鈕判斷使用"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT username FROM credentials")
+        rows = c.fetchall()
+        conn.close()
+        
+        # 轉換成單純的字串陣列，例如 ["doctor1", "admin1"]
+        users = [row[0] for row in rows]
+        return jsonify({"ok": True, "users": users})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
+
 
 # -------------------------------------------------------------
 # FIDO2 階段一：人臉綁定註冊 (Registration)
@@ -292,21 +329,42 @@ def register_complete():
     try:
         # 校驗 FIDO2 註冊資料
         auth_data = server.register_complete(state, credential_data)
-        
-        # 【修改】將公鑰資料 (bytes) 轉為可儲存的 Base64 字串
         cred_bytes = auth_data.credential_data
         cred_b64 = websafe_encode(cred_bytes)
         
-        # 【修改】寫入 SQLite 資料庫 (如果帳號已存在則覆蓋更新)
+        # 寫入 SQLite 資料庫
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("REPLACE INTO credentials (username, credential_data) VALUES (?, ?)", (username, cred_b64))
+        
+        # 自動登入
+        c.execute("SELECT role FROM users WHERE username=?", (username,))
+        user_row = c.fetchone()
         conn.commit()
         conn.close()
 
         del states[username] 
-        print(f"✅ FIDO2 註冊成功：已在 SQLite 儲存 {username} 的公鑰")
-        return jsonify({"ok": True, "status": "success"})
+        
+        if not user_row:
+            return jsonify({"ok": False, "status": "error", "message": "資料庫查無此使用者的權限設定"}), 500
+            
+        # 核發 Session 通行證
+        real_role = user_row[0] 
+        session["user"] = {"username": username, "role": real_role}
+        
+        print(f"✅ FIDO2 註冊成功並自動登入：{username} (權限: {real_role})")
+        write_log("REGISTER", f"FIDO2 註冊並自動登入成功 (指派角色: {real_role})")
+        
+        # 【修改回傳格式】比照 authenticate_complete，把 user 資料傳給前端
+        return jsonify({
+            "ok": True,
+            "status": "success",
+            "message": "FIDO2 註冊並自動登入成功",
+            "user": session["user"],
+            "permissions": get_permissions(real_role),
+            "role_label": ROLE_LABELS.get(real_role, real_role)
+        })
+        
     except Exception as e:
         print(f"❌ 註冊失敗: {e}")
         return jsonify({"ok": False, "status": "error", "message": str(e)}), 400
@@ -390,6 +448,7 @@ def authenticate_complete():
         session["user"] = {"username": username, "role": real_role}
         
         print(f"🔓 FIDO2 驗證成功：已登入 {username} (權限: {real_role})")
+        write_log("LOGIN", f"FIDO2 登入成功 (權限: {real_role})")
         
         return jsonify({
             "ok": True,
@@ -411,9 +470,29 @@ def authenticate_complete():
 @app.route("/api/logout", methods=["POST"])
 @login_required
 def logout():
-    """登出系統，全面清空 Session 授權狀態"""
+    """登出系統，可選擇是否重置 guest 帳號"""
+    user = session.get("user", {})
+    username = user.get("username")
+    
+    # 接收前端傳來的選項 (如果沒傳，預設為 False 不重置)
+    data = request.get_json(silent=True) or {}
+    reset_guest = data.get("reset_guest", False)
+    
+    # 必須是 guest「而且」前端有要求重置，才刪除公鑰
+    if username == "guest" and reset_guest:
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("DELETE FROM credentials WHERE username=?", (username,))
+            conn.commit()
+            conn.close()
+            print("🔄 公共帳號 guest 已登出，且人臉資料已成功重置！")
+        except Exception as e:
+            print(f"guest 重置失敗: {e}")
+
     session.clear()
-    return jsonify({"ok": True, "message": "已登出安全網關"})
+    write_log("LOGOUT", f"登出系統" + (" (並重置了 guest 人臉)" if username == "guest" and reset_guest else ""))
+    return jsonify({"ok": True, "message": "已登出"})
 
 
 @app.route("/api/me", methods=["GET"])
@@ -442,6 +521,11 @@ def me():
 @permission_required("view")
 def get_studies():
     try:
+        # 1. 先抓出現在是誰在看清單 (轉小寫方便比對)
+        user = session.get("user", {})
+        username = user.get("username", "").lower()
+        role = user.get("role", "")
+
         study_ids = orthanc_request("GET", "/studies").json()
         studies = []
 
@@ -449,12 +533,32 @@ def get_studies():
             detail = orthanc_request("GET", f"/studies/{study_id}").json()
             main_tags = dicom_tags(detail, "MainDicomTags")
             patient_tags = dicom_tags(detail, "PatientMainDicomTags")
-            series_ids = detail.get("Series", []) or []
+            
+            # 2. 【資料隔離核心邏輯】
+            # 抓出 DICOM 裡面的病患 ID 與 姓名
+            dicom_patient_name = patient_tags.get("PatientName", "").lower()
+            dicom_patient_id = patient_tags.get("PatientID", "").lower()
 
+            # 如果登入的是「病患(patient)」，進行嚴格審查
+            if role == "patient":
+                # 如果該病患的帳號 (例如 patient1) 不在 DICOM 的姓名或 ID 裡
+                if username not in dicom_patient_name and username not in dicom_patient_id:
+                    continue  # 🚫 直接跳過這筆資料，不給他看！(不會加進 studies 清單)
+
+            # 計算張數與重組資料
+            series_ids = detail.get("Series", []) or []
             instances_count = 0
+            cover_instance_id = None # 用來存封面圖片的 ID
+
             for series_id in series_ids:
                 series_detail = orthanc_request("GET", f"/series/{series_id}").json()
-                instances_count += len(series_detail.get("Instances", []) or [])
+                # 1. 先明確定義 instances 變數，把該 series 裡面的圖片陣列抓出來
+                instances = series_detail.get("Instances", []) or []
+                # 2. 透過剛剛定義的 instances 來計算數量並累加
+                instances_count += len(instances)
+                # 3. 如果這個 series 有圖片，且我們還沒拿到封面，就拿第一張當封面
+                if instances and not cover_instance_id:
+                    cover_instance_id = instances[0]
 
             studies.append(
                 {
@@ -467,15 +571,74 @@ def get_studies():
                     "patient_id": patient_tags.get("PatientID", ""),
                     "instances_count": instances_count,
                     "series_count": len(series_ids),
+                    "cover_instance_id": cover_instance_id # 把封面 ID 傳給前端
                 }
             )
 
+        # 依照日期排序
         studies.sort(key=lambda item: item.get("study_date", ""), reverse=True)
         return jsonify({"ok": True, "data": studies})
 
     except requests.RequestException as exc:
         return jsonify({"ok": False, "message": f"Orthanc 讀取失敗：{exc}"}), 500
 
+@app.route("/api/studies/<study_id>/modify", methods=["POST"])
+@login_required
+def modify_dicom_name(study_id):
+    """修改 DICOM 檔案名稱並賦予新身分"""
+    user = session.get("user", {})
+    role = user.get("role", "")
+    
+    if role not in ["admin", "doctor"]:
+        return jsonify({"ok": False, "message": "安全限制：您沒有權限修改醫療影像紀錄"}), 403
+        
+    data = request.get_json(silent=True) or {}
+    new_name = data.get("new_patient_name")
+    
+    if not new_name:
+        return jsonify({"ok": False, "message": "請提供新的病患名稱"}), 400
+
+    # 1. 產生一個全新的虛擬 Patient ID (用 study_id 的前 6 碼來保證不重複)
+    new_patient_id = f"TEST-{study_id[:6]}"
+
+    # 2. 準備修改指令：這次我們「同時」替換名字與 ID
+    payload = {
+        "Replace": {
+            "PatientName": new_name,
+            "PatientID": new_patient_id,  # 賦予全新的身分證字號
+            "SpecificCharacterSet": "ISO_IR 192" 
+        },
+        "Force": True,       
+        "KeepSource": False  
+    }
+
+    try:
+        orthanc_url = os.getenv('ORTHANC_URL', 'http://127.0.0.1:8042')
+        auth = (os.getenv('ORTHANC_USERNAME', ''), os.getenv('ORTHANC_PASSWORD', ''))
+        
+        # 3. 改回對 "studies" 發出請求
+        # 因為我們連 PatientID 都改了，Orthanc 這次會非常樂意幫我們把它獨立成一個新病患
+        resp = requests.post(
+            f"{orthanc_url}/studies/{study_id}/modify",
+            json=payload,
+            auth=auth,
+            verify=False
+        )
+        
+        if not resp.ok:
+            error_detail = resp.text
+            try:
+                error_detail = resp.json()
+            except:
+                pass
+            return jsonify({"ok": False, "message": f"Orthanc 拒絕修改: {error_detail}"}), 400
+            
+        # 4. 成功的話，寫入日誌並回傳
+        write_log("RENAME_STUDY_AND_SPLIT", f"將病歷 (Study ID: {study_id}) 獨立為新病患 [{new_name}] (新ID: {new_patient_id})")
+        return jsonify({"ok": True, "message": f"已成功將病歷獨立為新病患 [{new_name}]！"})
+        
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"網路或系統嚴重錯誤: {e}"}), 500
 
 @app.route("/api/studies/<study_id>", methods=["GET"])
 @login_required
@@ -522,7 +685,7 @@ def get_study_detail(study_id):
             "study_instance_uid": main_tags.get("StudyInstanceUID", ""),
             "instances_count": len(instances),
         }
-
+        write_log("VIEW_STUDY", f"查閱了病患 [{study_info.get('patient_name')}] 的影像紀錄 (Study ID: {study_id})")
         return jsonify({"ok": True, "study": study_info, "instances": instances})
 
     except requests.RequestException as exc:
@@ -578,6 +741,7 @@ def get_instance_preview(instance_id):
 def download_instance(instance_id):
     try:
         resp = orthanc_request("GET", f"/instances/{instance_id}/file", timeout=60)
+        write_log("DOWNLOAD_DICOM", f"下載了 DICOM 原始檔案 (Instance ID: {instance_id})")
         return send_file(
             BytesIO(resp.content),
             mimetype="application/dicom",
@@ -643,7 +807,7 @@ def upsert_user():
         c.execute("REPLACE INTO users (username, role) VALUES (?, ?)", (target_username, target_role))
         conn.commit()
         conn.close()
-        
+        write_log("ADMIN_UPSERT_USER", f"設定帳號 [{target_username}] 為 [{target_role}] 角色")
         return jsonify({"ok": True, "message": f"成功設定帳號 [{target_username}] 為 [{target_role}] 角色！"})
     except Exception as e:
         return jsonify({"ok": False, "message": f"設定失敗：{str(e)}"}), 500
@@ -669,10 +833,58 @@ def delete_user(target_username):
         
         conn.commit()
         conn.close()
-        
+        write_log("ADMIN_DELETE_USER", f"徹底刪除帳號 [{target_username}] 與其人臉綁定紀錄")
         return jsonify({"ok": True, "message": f"已徹底刪除帳號 [{target_username}] 與其人臉綁定紀錄"})
     except Exception as e:
         return jsonify({"ok": False, "message": f"刪除失敗：{str(e)}"}), 500
+    
+@app.route("/api/admin/users/<target_username>/fido", methods=["DELETE"])
+@login_required
+@permission_required("manage_users")
+def reset_user_fido(target_username):
+    """4. 僅清除人臉綁定紀錄，保留帳號與角色"""
+    # 保護機制：不能重置自己，以免管理員把自己鎖在門外
+    if session.get("user", {}).get("username") == target_username:
+        return jsonify({"ok": False, "message": "安全限制：管理員無法重置自己的人臉"}), 403
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        # 僅刪除 credentials (公鑰) 表中的資料
+        c.execute("DELETE FROM credentials WHERE username=?", (target_username,))
+        conn.commit()
+        conn.close()
+        write_log("ADMIN_RESET_FIDO", f"清除了 [{target_username}] 的人臉綁定紀錄")
+        return jsonify({"ok": True, "message": f"已成功清除 [{target_username}] 的人臉綁定紀錄，該帳號下次登入將重新啟動註冊流程。"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"清除失敗：{str(e)}"}), 500
+
+@app.route("/api/admin/logs", methods=["GET"])
+@login_required
+@permission_required("manage_users")
+def get_system_logs():
+    """取得系統稽核日誌 (僅限管理員)"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        # 抓取最新的 100 筆紀錄
+        c.execute("SELECT timestamp, username, action, details, ip_address FROM system_logs ORDER BY id DESC LIMIT 100")
+        rows = c.fetchall()
+        conn.close()
+        
+        logs = []
+        for row in rows:
+            logs.append({
+                "timestamp": row[0],
+                "username": row[1],
+                "action": row[2],
+                "details": row[3],
+                "ip_address": row[4]
+            })
+        return jsonify({"ok": True, "logs": logs})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
 
 # -------------------------
 # Role-based write APIs
@@ -696,7 +908,7 @@ def upload_instance():
             headers={"Content-Type": "application/dicom"},
             timeout=60,
         ).json()
-
+        write_log("UPLOAD_DICOM", f"上傳了新的 DICOM 檔案 (Orthanc ID: {uploaded.get('ID')})")
         return jsonify({"ok": True, "message": "DICOM 加入成功", "orthanc": uploaded})
 
     except requests.RequestException as exc:
@@ -747,7 +959,8 @@ def modify_instance(instance_id):
         if data.get("replace_original", True):
             orthanc_request("DELETE", f"/instances/{instance_id}", timeout=60)
             deleted_original = True
-
+            
+        write_log("MODIFY_INSTANCE", f"修改了 DICOM 內部標籤 (Instance ID: {instance_id})")
         return jsonify(
             {
                 "ok": True,
@@ -767,13 +980,24 @@ def modify_instance(instance_id):
 def delete_instance(instance_id):
     try:
         orthanc_request("DELETE", f"/instances/{instance_id}", timeout=60)
+        write_log("DELETE_DICOM", f"刪除了 DICOM 檔案 (Instance ID: {instance_id})")
         return jsonify({"ok": True, "message": "DICOM 已移除"})
     except requests.RequestException as exc:
         return jsonify({"ok": False, "message": f"DICOM 移除失敗：{exc}"}), 500
 
 
 if __name__ == "__main__":
-    is_debug_mode = os.getenv("FLASK_DEBUG", "true").lower() in ["true", "1"]
-    cert_path = '/etc/letsencrypt/live/telemed-sec.duckdns.org/fullchain.pem'
-    key_path = '/etc/letsencrypt/live/telemed-sec.duckdns.org/privkey.pem'
-    app.run(host="0.0.0.0", port=5000, ssl_context=(cert_path, key_path), debug=True)
+    # 自動判斷要綁定在哪個 IP (雲端用 0.0.0.0，本機用 127.0.0.1)
+    server_host = os.getenv("FLASK_HOST", "127.0.0.1")
+    
+    # 從環境變數讀取憑證路徑
+    cert_path = os.getenv("SSL_CERT_PATH", "")
+    key_path = os.getenv("SSL_KEY_PATH", "")
+
+    # 自動偵測：如果環境變數有給憑證路徑，而且檔案真的存在，才啟動 HTTPS
+    if cert_path and key_path and os.path.exists(cert_path) and os.path.exists(key_path):
+        print(f"🚀 啟動正式環境 (HTTPS) | Host: {server_host} | Domain: {RP_ID}")
+        app.run(host=server_host, port=5000, ssl_context=(cert_path, key_path), debug=IS_DEVELOPMENT)
+    else:
+        print(f"🔧 啟動開發環境 (HTTP) | Host: {server_host} | Domain: {RP_ID}")
+        app.run(host=server_host, port=5000, debug=IS_DEVELOPMENT)
