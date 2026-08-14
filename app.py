@@ -980,13 +980,15 @@ def pi_upload():
     # 1. 從環境變數讀取Secret Key
     secret_key = os.getenv("PI_API_SECRET")
     if not secret_key:
+        write_log("PI_UPLOAD_ERROR", "伺服器環境變數未設定 PI_API_SECRET")
         return jsonify({"ok": False, "message": "伺服器環境變數未設定 PI_API_SECRET"}), 500
 
-    # 2. 取得樹莓派傳來的「時間戳記」與「動態簽名」 (沒有傳遞密碼)
+    # 2. 取得樹莓派傳來的「時間戳記」與「動態簽名」
     client_timestamp = request.headers.get('X-Pi-Timestamp')
     client_signature = request.headers.get('X-Pi-Signature')
 
     if not client_timestamp or not client_signature:
+        write_log("PI_UPLOAD_FAILED", "拒絕存取：缺少 HMAC 安全憑證")
         return jsonify({"ok": False, "message": "缺少 HMAC 安全憑證，拒絕存取"}), 403
 
     # 3. 【防禦重播攻擊】檢查時間戳記是否超過 2 分鐘 (120秒)
@@ -994,11 +996,13 @@ def pi_upload():
         client_time_int = int(client_timestamp)
         current_time = int(time.time())
         if abs(current_time - client_time_int) > 120:
+            write_log("PI_UPLOAD_FAILED", f"拒絕存取：請求已過期 (攔截到重播攻擊，時間戳記: {client_timestamp})")
             return jsonify({"ok": False, "message": "請求已過期 (防止重播攻擊攔截)"}), 403
     except ValueError:
+        write_log("PI_UPLOAD_FAILED", "時間戳記格式錯誤")
         return jsonify({"ok": False, "message": "時間戳記格式錯誤"}), 400
 
-    # 4. 【核心魔法】伺服器自己算一次簽名
+    # 4. 伺服器自己算一次簽名
     # 規則：用 Secret Key 把 Timestamp 攪拌均勻 (SHA256)
     message = str(client_timestamp).encode('utf-8')
     secret = secret_key.encode('utf-8')
@@ -1006,25 +1010,32 @@ def pi_upload():
 
     # 5. 【防止時間差攻擊】使用 compare_digest 安全比對兩邊的簽名
     if not hmac.compare_digest(expected_signature, client_signature):
+        write_log("PI_UPLOAD_FAILED", "拒絕存取：HMAC 簽章驗證失敗 (假冒的機器連線)")
         return jsonify({"ok": False, "message": "HMAC 簽章驗證失敗，你是假冒的機器！"}), 403
 
     # ============ 驗證通過！下面是圖片轉換邏輯 ============
     
     if 'image' not in request.files:
+        write_log("PI_UPLOAD_ERROR", "已通過驗證，但未附帶圖片檔案")
         return jsonify({"ok": False, "message": "沒有找到圖片檔案"}), 400
         
     file = request.files['image']
     img_base64 = base64.b64encode(file.read()).decode('utf-8')
     img_data_uri = f"data:image/jpeg;base64,{img_base64}"
+
+    # 動態接收病患資訊 (如果樹莓派沒傳，就用預設值防呆)
+    patient_id = request.form.get("patient_id", "UNKNOWN-PI-001")
+    patient_name = request.form.get("patient_name", "未命名病患(來自樹莓派)")
     
     orthanc_url = os.getenv('ORTHANC_URL', 'http://127.0.0.1:8042')
     auth = (os.getenv('ORTHANC_USERNAME', ''), os.getenv('ORTHANC_PASSWORD', ''))
     
+    # 將接收到的資訊填入 DICOM 標籤
     payload = {
         "Tags": {
-            "PatientName": "pi",
-            "PatientID": "PI-HMAC",
-            "StudyDescription": "通過動態簽章驗證之遠端影像"
+            "PatientName": patient_name,
+            "PatientID": patient_id,
+            "StudyDescription": "樹莓派採集影像"
         },
         "Content": img_data_uri
     }
@@ -1032,10 +1043,13 @@ def pi_upload():
     try:
         resp = requests.post(f"{orthanc_url}/tools/create-dicom", json=payload, auth=auth)
         if resp.ok:
+            write_log("PI_UPLOAD_SUCCESS", "HMAC 驗證通過！樹莓派影像已成功轉為 DICOM 並存入資料庫")
             return jsonify({"ok": True, "message": "HMAC 驗證通過！樹莓派影像已成功存入資料庫！"})
         else:
+            write_log("PI_UPLOAD_ERROR", f"Orthanc 處理失敗: {resp.text}")
             return jsonify({"ok": False, "message": f"Orthanc 處理失敗: {resp.text}"}), 500
     except Exception as e:
+        write_log("PI_UPLOAD_ERROR", f"系統錯誤: {e}")
         return jsonify({"ok": False, "message": f"系統錯誤: {e}"}), 500
 
 @app.route("/api/instances/<instance_id>", methods=["DELETE"])
