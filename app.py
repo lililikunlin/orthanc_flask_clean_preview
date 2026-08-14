@@ -1033,6 +1033,7 @@ def pi_upload():
     # 將接收到的資訊填入 DICOM 標籤
     payload = {
         "Tags": {
+            "SpecificCharacterSet": "ISO_IR 192",  # ISO_IR 192 就是 DICOM 裡的 UTF-8
             "PatientName": patient_name,
             "PatientID": patient_id,
             "StudyDescription": "樹莓派採集影像"
