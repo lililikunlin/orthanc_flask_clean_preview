@@ -152,7 +152,7 @@
                               countdownDiv.style.display = 'none';
                           }, 3000);
 
-                      }, 2500); // 等待 2.5 秒再重整清單，確保 Orthanc 已經轉檔完畢
+                      }, 5000); // 等待 5 秒再重整清單，確保 Orthanc 已經轉檔完畢
                   })
                   .catch(err => {
                       // 如果 apiFetch 失敗，會直接跳進 catch
