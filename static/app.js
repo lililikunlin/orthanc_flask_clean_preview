@@ -119,6 +119,7 @@ function renderRoleInfo() {
   const badgesEl = document.getElementById("permissionBadges");
   const adminSection = document.getElementById("adminSection"); // 抓取管理面板
   const adminLogsSection = document.getElementById("adminLogsSection"); // 抓取日誌區塊
+  const patientCameraSection = document.getElementById("patientCameraSection"); // 抓取病患相機面板
 
   // 1. 處理「尚未登入」的狀態
   if (!currentUser) {
@@ -127,6 +128,7 @@ function renderRoleInfo() {
     uploadSection.hidden = true;
     adminSection.hidden = true;
     if (adminLogsSection) adminLogsSection.hidden = true; // 未登入時隱藏日誌
+    if (patientCameraSection) patientCameraSection.hidden = true; // 未登入時隱藏相機面板
     return;
   }
 
@@ -149,6 +151,16 @@ function renderRoleInfo() {
   } else {
       adminSection.hidden = true;
       if (adminLogsSection) adminLogsSection.hidden = true; // 隱藏日誌
+  }
+  // 5. 處理「病患專屬相機面板」顯示與否，並自動填入 ID
+  if (currentUser.role === 'patient') {
+      if (patientCameraSection) {
+          patientCameraSection.hidden = false;
+          // 自動把目前登入的病患帳號填入輸入框，省去手動輸入
+          document.getElementById("patientId").value = currentUser.username;
+      }
+  } else {
+      if (patientCameraSection) patientCameraSection.hidden = true;
   }
 }
 
