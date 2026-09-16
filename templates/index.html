@@ -80,6 +80,90 @@
           <div class="status-box" id="uploadStatus">等待上傳</div>
         </section>
 
+        <!-- 邊緣設備影像擷取 (病患專用面板) -->
+        <div id="patientCameraSection" class="card p-4 my-3" style="border: 2px solid #007bff; border-radius: 8px;" hidden>
+            <h4>📷 遠距醫療影像採集 (病患本人授權)</h4>
+            <p class="text-muted">請確認您的資訊無誤，點擊按鈕後將啟動現場邊緣鏡頭進行拍攝。</p>
+            
+            <div class="mb-3">
+                <label>病患識別碼：</label>
+                <input type="text" id="patientId" class="form-control" readonly>
+            </div>
+            <div class="mb-3">
+                <label>病患姓名：</label>
+                <input type="text" id="patientName" class="form-control" placeholder="請輸入姓名">
+            </div>
+
+            <button type="button" onclick="startCaptureConsent()" id="consentCaptureBtn" class="primary-btn" style="width: 100%; margin-top: 10px;">
+                我同意進行影像拍攝並上傳
+            </button>
+            
+            <!-- 倒數計時提示 -->
+            <div id="captureCountdown" class="mt-3 text-center" style="display: none;">
+                <h2 id="countdownText" style="color: #d9534f; font-weight: bold;"></h2>
+            </div>
+        </div>
+
+        <script>
+        function startCaptureConsent()  {
+          const pid = document.getElementById('patientId').value.trim();
+          const pname = document.getElementById('patientName').value.trim();
+          const btn = document.getElementById('consentCaptureBtn');
+          const countdownDiv = document.getElementById('captureCountdown');
+          const countdownText = document.getElementById('countdownText');
+
+          if (!pname) {
+              alert("請先輸入病患姓名以完成授權！");
+              return;
+          }
+
+          btn.disabled = true;
+          countdownDiv.style.display = 'block';
+
+          // 啟動倒數計時 (3, 2, 1)
+          let count = 3;
+          countdownText.innerText = `倒數 ${count} 秒... 請正視前方鏡頭`;
+
+          const timer = setInterval(() => {
+              count--;
+              if (count > 0) {
+                  countdownText.innerText = `倒數 ${count} 秒... 請正視鏡頭`;
+              } else {
+                  clearInterval(timer);
+                  countdownText.innerText = "📸 正在拍攝並以 HMAC 加密傳輸中...";
+
+                  // 自動帶上登入 Cookie
+                  apiFetch('/api/pi/trigger', {
+                      method: 'POST',
+                      body: JSON.stringify({ patient_id: pid, patient_name: pname })
+                  })
+                  .then(result => {
+                      // 給樹莓派與 Orthanc 一點時間處理與轉檔
+                      setTimeout(() => {
+                          countdownText.innerText = "✅ 影像已安全送達 PACS！";
+                          btn.disabled = false;
+                          
+                          if (typeof loadStudies === 'function') {
+                              loadStudies(); 
+                          }
+                          
+                          // 3 秒後把倒數計時的文字隱藏起來，讓介面恢復乾淨
+                          setTimeout(() => {
+                              countdownDiv.style.display = 'none';
+                          }, 3000);
+
+                      }, 2500); // 等待 2.5 秒再重整清單，確保 Orthanc 已經轉檔完畢
+                  })
+                  .catch(err => {
+                      // 如果 apiFetch 失敗，會直接跳進 catch
+                      alert(err.message);
+                      btn.disabled = false;
+                      countdownDiv.style.display = 'none';
+                  });
+              }
+          }, 1000);
+        }
+        </script>
       </div>
       <div class="main-content">
 

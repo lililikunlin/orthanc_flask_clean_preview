@@ -1042,7 +1042,7 @@ def pi_upload():
     }
     
     try:
-        resp = requests.post(f"{orthanc_url}/tools/create-dicom", json=payload, auth=auth)
+        resp = requests.post(f"{orthanc_url}/tools/create-dicom", json=payload, auth=auth, verify=ORTHANC_VERIFY_SSL)
         if resp.ok:
             write_log("PI_UPLOAD_SUCCESS", "HMAC 驗證通過！樹莓派影像已成功轉為 DICOM 並存入資料庫")
             return jsonify({"ok": True, "message": "HMAC 驗證通過！樹莓派影像已成功存入資料庫！"})
@@ -1052,6 +1052,50 @@ def pi_upload():
     except Exception as e:
         write_log("PI_UPLOAD_ERROR", f"系統錯誤: {e}")
         return jsonify({"ok": False, "message": f"系統錯誤: {e}"}), 500
+
+# ==========================================
+# 邊緣設備 (IoT) 狀態管理模組
+# ==========================================
+# 記憶體全域變數，避免頻繁讀寫 SQLite 資料庫
+pi_status = {
+    "status": "idle",       # "idle" (待機) 或 "ready" (可拍照)
+    "patient_id": "",
+    "patient_name": ""
+}
+
+@app.route('/api/pi/trigger', methods=['POST'])
+@login_required
+def trigger_pi():
+    user_data = session.get('user', {})
+    current_role = user_data.get('role')
+
+    # 權限檢查
+    if current_role != 'patient':
+        return jsonify({"ok": False, "message": "權限不足：僅限病患操作影像擷取！"}), 403
+
+    data = request.get_json() or {}
+    
+    patient_id = data.get("patient_id") or user_data.get("username", "PATIENT-001")
+    patient_name = data.get("patient_name") or "病患本人"
+
+    pi_status["status"] = "ready"
+    pi_status["patient_id"] = patient_id
+    pi_status["patient_name"] = patient_name
+
+    return jsonify({"ok": True, "message": "授權成功，邊緣設備準備拍攝中！"})
+
+@app.route('/api/pi/status', methods=['GET'])
+def get_pi_status():
+    """供樹莓派每 2 秒輪詢一次目前指令"""
+    return jsonify(pi_status)
+
+@app.route('/api/pi/status/reset', methods=['POST'])
+def reset_pi_status():
+    """樹莓派上傳完成後，重置狀態回待機模式"""
+    pi_status["status"] = "idle"
+    pi_status["patient_id"] = ""
+    pi_status["patient_name"] = ""
+    return jsonify({"ok": True})
 
 @app.route("/api/instances/<instance_id>", methods=["DELETE"])
 @login_required
