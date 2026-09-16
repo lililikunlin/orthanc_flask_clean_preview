@@ -158,6 +158,8 @@ function renderRoleInfo() {
           patientCameraSection.hidden = false;
           // 自動把目前登入的病患帳號填入輸入框，省去手動輸入
           document.getElementById("patientId").value = currentUser.username;
+          // 同步把帳號當作預設姓名帶入
+          document.getElementById("patientName").value = currentUser.username;
       }
   } else {
       if (patientCameraSection) patientCameraSection.hidden = true;

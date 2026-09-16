@@ -547,7 +547,7 @@ def get_studies():
             # 如果登入的是「病患(patient)」，進行嚴格審查
             if role == "patient":
                 # 如果該病患的帳號 (例如 patient1) 不在 DICOM 的姓名或 ID 裡
-                if username not in dicom_patient_name and username not in dicom_patient_id:
+                if username != dicom_patient_name and username != dicom_patient_id:
                     continue  # 🚫 直接跳過這筆資料，不給他看！(不會加進 studies 清單)
 
             # 計算張數與重組資料
